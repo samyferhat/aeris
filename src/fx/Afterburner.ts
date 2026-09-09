@@ -67,15 +67,18 @@ void main() {
   diamond *= (1.0 - smoothstep(0.05, 0.72, t)) * smoothstep(0.6, 0.15, r);
 
   // Colour: white-blue core, violet-blue mid, orange sheath.
-  vec3 core = vec3(2.4, 2.6, 3.0);
-  vec3 mid  = vec3(0.55, 0.62, 1.5);
-  vec3 outer= vec3(1.5, 0.55, 0.14);
+  // Values above 1 are deliberate — this is an HDR buffer and the bloom pass turns the
+  // excess into glow — but the first cut ran three times hotter and simply clipped to
+  // white, losing the blue core that makes reheat recognisable.
+  vec3 core = vec3(1.35, 1.50, 1.85);
+  vec3 mid  = vec3(0.40, 0.46, 1.00);
+  vec3 outer= vec3(0.90, 0.32, 0.08);
   float coreMask = (1.0 - smoothstep(0.0, 0.30, t)) * (1.0 - smoothstep(0.10, 0.55, r));
   float midMask  = (1.0 - smoothstep(0.10, 0.75, t)) * (1.0 - smoothstep(0.35, 0.95, r));
   vec3 col = outer;
   col = mix(col, mid, clamp(midMask, 0.0, 1.0));
   col = mix(col, core, clamp(coreMask, 0.0, 1.0));
-  col += core * diamond * 1.6;
+  col += core * diamond * 0.95;
 
   // Fades out downstream and with how far the throttle is past the detent.
   float axial = (1.0 - smoothstep(0.55, 1.0, t));
@@ -179,7 +182,7 @@ export class Afterburner extends THREE.Group {
     // Flicker: reheat is not steady.
     const flicker = 0.85 + 0.15 * Math.sin(this.time * 47) * Math.sin(this.time * 31 + 1.3);
     for (const l of this.lights) {
-      l.intensity = amount * amount * 900 * flicker * (0.45 + 0.55 * night);
+      l.intensity = amount * amount * 460 * flicker * (0.40 + 0.60 * night);
       l.distance = 30 + 45 * amount;
     }
   }
