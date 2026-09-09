@@ -156,8 +156,13 @@ export const MIG29: AircraftConfig = {
   cd0: 0.021, cdFlaps: 0.05, oswald: 0.72,
   machDragOnset: 0.86, machDragRise: 0.055,
 
-  cmAlpha: -0.62, cmElevator: 1.05, cmQ: -19,
-  clAileron: 0.20, clP: -0.42, clBeta: -0.055,
+  // Steady roll rate is Cl_da / -Cl_p * 2V/b: 0.048 / 0.44 at 230 m/s gives about
+  // 250 deg/s, which is what a Fulcrum does. The same ratio on the Cessna would be
+  // gentle — flying four times faster is most of why the jet feels so much sharper.
+  // Elevator power is set so that full aft stick trims to roughly 34 degrees of alpha
+  // rather than a physically meaningless number that only the protections hold back.
+  cmAlpha: -0.62, cmElevator: 0.34, cmQ: -19,
+  clAileron: 0.048, clP: -0.44, clBeta: -0.055,
   cnRudder: 0.085, cnR: -0.14, cnBeta: 0.16, cnAileron: -0.010,
   slipstreamYaw: 0, controlRate: 6.5, stability: 0.30, gLimit: 9.0,
 

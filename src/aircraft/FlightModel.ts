@@ -123,8 +123,10 @@ export class FlightModel {
   }
 
   resetOnRunway(x: number, z: number, y: number, headingRad: number) {
+    // Set the wheels slightly compressed rather than hovering: starting in the air means
+    // the first frames report airborne, which trips anything watching for a touchdown.
     const groundClearance = -this.wheels.reduce((m, w) => Math.min(m, w.local.y), 0);
-    this.position.set(x, y + groundClearance + 0.04, z);
+    this.position.set(x, y + groundClearance - 0.02, z);
     this.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), headingRad);
     this.velocity.set(0, 0, 0);
     this.omega.set(0, 0, 0);
