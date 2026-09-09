@@ -95,6 +95,12 @@ export interface AircraftConfig {
   /** Approach speed hint shown to the player, knots. */
   approachSpeed: number;
   rotateSpeed: number;
+  /**
+   * How brightly the cabin interior is lit, relative to the trainer. A fighter's
+   * cockpit is a dark grey-green cave under a tinted canopy; a light aircraft's is a
+   * bright greenhouse. Without this they both come out the same mid-grey.
+   */
+  cabinBrightness: number;
 }
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -132,6 +138,7 @@ export const CESSNA: AircraftConfig = {
 
   refSpeed: 70, chaseDistance: 14, chaseHeight: 4.2,
   fovBase: 55, fovSpeed: 18, approachSpeed: 60, rotateSpeed: 55,
+  cabinBrightness: 1.0,
 };
 
 export const MIG29: AircraftConfig = {
@@ -175,7 +182,8 @@ export const MIG29: AircraftConfig = {
   retractableGear: true, gearTravelTime: 4.5,
 
   refSpeed: 260, chaseDistance: 26, chaseHeight: 6.0,
-  fovBase: 52, fovSpeed: 26, approachSpeed: 145, rotateSpeed: 140,
+  fovBase: 50, fovSpeed: 16, approachSpeed: 145, rotateSpeed: 140,
+  cabinBrightness: 0.55,
 };
 
 export const AIRCRAFT: AircraftConfig[] = [CESSNA, MIG29];

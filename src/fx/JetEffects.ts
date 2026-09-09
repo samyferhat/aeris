@@ -51,7 +51,10 @@ void main() {
   // Grazing angles see the most vapour, as with any thin shell.
   float rim = 1.0 - abs(dot(normalize(vViewDir), normalize(vWorldNormal)));
   float wisp = noise(vLocalPos * vec3(2.2, 2.2, 0.9) + vec3(0.0, 0.0, uTime * 3.0));
-  float a = band * pow(rim, 1.35) * (0.55 + 0.75 * wisp) * uAmount;
+  // A vapour cone is a thin condensation shell, so almost all of it is seen edge-on at
+  // the silhouette. A soft rim falloff fills the whole disc instead and wraps the
+  // aircraft in a ball of cotton wool; a sharp one leaves the conical outline.
+  float a = band * pow(rim, 3.0) * (0.40 + 0.80 * wisp) * uAmount;
   gl_FragColor = vec4(vec3(0.92, 0.95, 1.0) * a, a);
 }`;
 
@@ -132,9 +135,9 @@ export class JetEffects extends THREE.Group {
 
     // The cone lives in a narrow band either side of Mach 1, and needs moist air, so it
     // is a low-level phenomenon.
-    const machBand = smoothstep(0.92, 0.985, s.mach) * (1 - smoothstep(1.02, 1.14, s.mach));
+    const machBand = smoothstep(0.955, 0.995, s.mach) * (1 - smoothstep(1.02, 1.12, s.mach));
     const humid = 1 - smoothstep(1500, 5000, s.altitude);
-    const coneAmount = machBand * humid * 0.9;
+    const coneAmount = machBand * humid * 0.45;
     this.coneMat.uniforms.uAmount.value = coneAmount;
     this.cone.visible = coneAmount > 0.004;
 

@@ -41,7 +41,9 @@ float noise(vec3 x) {
 }
 /** Radius of the plume at station t, in metres. */
 float plumeWidth(float t) {
-  return uRadius * mix(0.95, 2.45, smoothstep(0.0, 1.0, t)) * (0.62 + 0.38 * uAmount);
+  // Reheat is a column, not a trumpet: the jet leaves the nozzle over-expanded and only
+  // spreads slowly. Flaring it to two and a half nozzle radii read as a rocket exhaust.
+  return uRadius * mix(1.00, 1.55, smoothstep(0.0, 1.0, t)) * (0.70 + 0.30 * uAmount);
 }
 `;
 
@@ -62,7 +64,8 @@ void main() {
   vec3 originView = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
   // The plume runs along the object's -Z.
   vec3 axisView = normalize((modelViewMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xyz);
-  vec3 centre = originView + axisView * (aStation * uLength);
+  // The plume also grows as the reheat lights rather than only brightening.
+  vec3 centre = originView + axisView * (aStation * uLength * (0.55 + 0.45 * uAmount));
   vec3 p = centre + vec3(position.x, position.y, 0.0) * plumeWidth(aStation);
   gl_Position = projectionMatrix * vec4(p, 1.0);
 }
@@ -94,7 +97,7 @@ void main() {
   vec3 mid   = vec3(0.42, 0.50, 1.05);
   vec3 outer = vec3(0.95, 0.34, 0.09);
   float coreMask = (1.0 - smoothstep(0.0, 0.24, t)) * (1.0 - smoothstep(0.0, 0.55, r));
-  float midMask  = (1.0 - smoothstep(0.05, 0.66, t)) * (1.0 - smoothstep(0.15, 0.95, r));
+  float midMask  = (1.0 - smoothstep(0.05, 0.86, t)) * (1.0 - smoothstep(0.15, 0.95, r));
   vec3 col = outer;
   col = mix(col, mid, clamp(midMask, 0.0, 1.0));
   col = mix(col, core, clamp(coreMask, 0.0, 1.0));

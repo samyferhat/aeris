@@ -117,8 +117,15 @@ void main() {
   if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
   float segLen = t1 - t0;
-  float stepLen = max(segLen / float(STEPS), 12.0);
-  int steps = int(min(float(STEPS), segLen / stepLen) + 1.0);
+  // Geometric step growth. A uniform step long enough to reach the far end of a shallow
+  // ray is 270 m, which steps clean over puffs that are 100 m across: neighbouring
+  // pixels then sample unrelated features and the jitter meant to hide that shows up as
+  // a dither grid across the whole deck. Growing the step keeps the near cloud, where
+  // the eye reads shape, at 30-40 m, and spends the coarse samples far away where
+  // aerial perspective has washed the detail out anyway. Same sample count, same cost.
+  const float GROWTH = 1.055;
+  float span = (pow(GROWTH, float(STEPS)) - 1.0) / (GROWTH - 1.0);
+  float stepLen = max(segLen / span, 10.0);
   float jitter = interleavedGradient(gl_FragCoord.xy);
   float t = t0 + stepLen * jitter;
 
@@ -129,7 +136,7 @@ void main() {
   float T = 1.0;
   vec3 sunL = uSunColor * uSunIntensity * 0.85;
   for (int i = 0; i < STEPS; i++) {
-    if (i >= steps || T < 0.03 || t > t1) break;
+    if (T < 0.03 || t > t1) break;
     vec3 p = ro + rd * t;
     float hf = heightFrac(p);
     float d = densityAt(p, hf, true);
@@ -145,6 +152,7 @@ void main() {
       T *= exp(-ext);
     }
     t += stepLen * (d > 0.001 ? 1.0 : 1.6);
+    stepLen *= GROWTH;
   }
   // Aerial perspective on the cloud itself, so distant cloud banks wash out.
   if (T < 0.999) {

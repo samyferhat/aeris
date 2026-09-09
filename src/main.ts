@@ -113,7 +113,7 @@ async function boot() {
         .map((n) => aircraft!.locators[n])
         .filter(Boolean) as THREE.Vector3[];
       if (exits.length) {
-        afterburner = new Afterburner(exits, 0.58, 11);
+        afterburner = new Afterburner(exits, 0.52, 6.2);
         aircraft.add(afterburner);
       }
       jetEffects = new JetEffects(cfg.span, 17);
@@ -196,7 +196,7 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input };
 
   let last = performance.now();
   let turbulence = 0;
@@ -275,6 +275,9 @@ async function boot() {
     const entries = AIRCRAFT.filter((c) => loaded.has(c.id)).map((c) => ({ config: c, object: loaded.get(c.id)! }));
     if (entries.length > 1) {
       const selection = new Selection(renderer, scene.environment, entries);
+      // Exposed so the screenshot tooling can drive a frame: the selection runs on its
+      // own rAF loop, which a hidden tab never services.
+      (window as any).__aeris.selection = selection;
       let selLast = performance.now();
       const selLoop = () => {
         if (selection.isDone) return;

@@ -280,10 +280,19 @@ export class Pipeline {
     atmoUniforms.uCsTime.value = this.time;
     atmoUniforms.uCsCoverage.value = this.cloudCoverage;
     atmoUniforms.uCsBase.value = this.cloudBase;
-    this.blit(this.cloudMat, this.cloudRT2);
-    // Take the dither off before the depth-aware upsample sees it.
+    this.blit(this.cloudMat, this.cloudRT);
+    // Take the dither off before the depth-aware upsample sees it. One tent at half
+    // resolution covers a pixel and a half at full resolution, which is narrower than
+    // the period of the interleaved gradient pattern it is meant to remove: the grid
+    // survives on the distant deck where the ray steps are longest. A second, wider
+    // tent puts the kernel past that period. Two nine-tap blits at half resolution are
+    // far cheaper than the extra raymarch samples that would fix it at the source.
+    const tx = 1 / (this.w >> 1), ty = 1 / (this.h >> 1);
+    this.blurMat.uniforms.tDiffuse.value = this.cloudRT.texture;
+    this.blurMat.uniforms.uTexel.value.set(tx, ty);
+    this.blit(this.blurMat, this.cloudRT2);
     this.blurMat.uniforms.tDiffuse.value = this.cloudRT2.texture;
-    this.blurMat.uniforms.uTexel.value.set(1 / (this.w >> 1), 1 / (this.h >> 1));
+    this.blurMat.uniforms.uTexel.value.set(tx * 2.1, ty * 2.1);
     this.blit(this.blurMat, this.cloudRT);
     // 2b. exhaust heat haze — a layer-masked render of just the distortion cones.
     // The buffer is cleared either way so a propeller aircraft reads zero offset.

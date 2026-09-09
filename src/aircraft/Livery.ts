@@ -89,10 +89,10 @@ const LIVERY_BODY = /* glsl */ `
   // ---- registration -------------------------------------------------------
   // Planar projection on both flanks, flipped so it reads correctly from each side.
   float regU = (sideSign > 0.0 ? -P.z : P.z);
-  vec2 regUv = vec2((regU + 3.55) / 2.10, (P.y - 0.06) / 0.46);
+  vec2 regUv = vec2((regU + 3.55) / 2.10, (P.y - 0.24) / 0.46);
   float onFlank = step(0.55, ax * 0.0 + abs(N.x)) * fuse;
   if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0 && onFlank > 0.5) {
-    float ink = texture2D(uRegMap, vec2(regUv.x, 1.0 - regUv.y)).a;
+    float ink = texture2D(uRegMap, regUv).a;
     col = mix(col, navy * 0.55, ink * 0.94);
   }
 
@@ -417,14 +417,16 @@ const MIG_BODY = /* glsl */ `
   // per side so the digits read nose-first from either beam, and the surface has to be
   // facing sideways — without that test the number wraps over the spine.
   float onFlank = step(0.55, abs(N.x)) * (1.0 - smoothstep(0.45, 0.70, abs(N.y)))
-                * step(ax, 1.45) * step(5.00, P.z) * step(P.z, 8.60);
+                * step(ax, 1.45) * step(4.30, P.z) * step(P.z, 7.95);
   if (onFlank > 0.5) {
     // Projected planar on each flank with the axis reversed between them, so the digits
-    // read nose-first from either beam rather than mirrored on one side.
-    float regU = sideSign > 0.0 ? (8.45 - P.z) : (P.z - 5.05);
+    // read the right way round from either beam rather than mirrored on one side. The
+    // window stops short of the radome: the nose curves too fast there for a planar
+    // projection, and the number would run onto the black dielectric.
+    float regU = sideSign > 0.0 ? (7.75 - P.z) : (P.z - 4.35);
     vec2 regUv = vec2(regU / 3.40, (P.y + 0.52) / 0.94);
     if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0) {
-      float ink = texture2D(uRegMap, vec2(regUv.x, 1.0 - regUv.y)).a;
+      float ink = texture2D(uRegMap, regUv).a;
       col = mix(col, vec3(0.44, 0.032, 0.032), ink * 0.94);
     }
   }
@@ -596,7 +598,14 @@ export function applyCanopy(material: THREE.MeshStandardMaterial, mesh: THREE.Me
           vec3 c = vec3(0.55, 0.42, 0.82);
           vec3 tint = mix(a, b, smoothstep(0.30, 0.72, f));
           tint = mix(tint, c, smoothstep(0.70, 0.98, f));
-          diffuseColor.rgb *= tint;
+          // The film is on the outside of the shell. Looking in at it, that film plus
+          // the reflection is the whole effect and it should be strong; looking out
+          // through it from the seat, the same numbers turn the sky violet and drop a
+          // colour cast over the entire instrument panel. Back faces are the ones the
+          // pilot sees, so they get a near-clear window.
+          float inside = gl_FrontFacing ? 1.0 : 0.0;
+          diffuseColor.rgb *= mix(tint, vec3(1.0), inside * 0.80);
+          diffuseColor.a *= mix(1.0, 0.30, inside);
         }`)
       .replace('#include <roughnessmap_fragment>', `
         float roughnessFactor = roughness;

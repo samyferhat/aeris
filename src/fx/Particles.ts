@@ -10,7 +10,7 @@ import { clamp, smoothstep } from '../core/Noise';
  * One interleaved buffer holds every particle; a single additive point-sprite draw call
  * renders the lot, with size, colour and fade evaluated in the shader from the age.
  */
-const MAX = 2200;
+const MAX = 4200;
 
 type Kind = 0 | 1 | 2;   // 0 vapour, 1 exhaust, 2 dust
 
@@ -53,12 +53,22 @@ export class Particles extends THREE.Points {
           float t = clamp(aData.x / aData.y, 0.0, 1.0);
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           // Puffs expand as they age; vapour expands least, dust the most.
-          float grow = mix(1.0, aData.w < 0.5 ? 2.4 : (aData.w < 1.5 ? 3.4 : 3.0), t);
+          // Vapour barely spreads before it evaporates; smoke and dust billow.
+          float grow = mix(1.0, aData.w < 0.5 ? 1.6 : (aData.w < 1.5 ? 3.4 : 3.0), t);
           // aData.z is a diameter in metres; uPixelScale converts metres at one metre of
           // depth into pixels, so the puff keeps a physical size instead of a screen one.
-          gl_PointSize = clamp(aData.z * grow * uPixelScale / max(-mv.z, 1.0), 1.0, 420.0);
+          float px = aData.z * grow * uPixelScale / max(-mv.z, 1.0);
+          gl_PointSize = clamp(px, 1.0, 420.0);
           // Fade in quickly, out slowly; vapour also thins as it stretches.
           vAlpha = smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.35, 1.0, t));
+          // Two fades, both only on vapour. The trail is emitted from the wingtips and
+          // streams back past the camera, so a handful of sprites always end up a few
+          // metres from the eye where each covers thirty pixels and six of them stack
+          // into one opaque white ball. Capping the screen size of a single sprite is
+          // not enough because it is the stack that saturates, so the near half of the
+          // chase distance is faded out as well. Everything the eye actually reads as
+          // the vortex — the part between the aircraft and the camera — is untouched.
+          if (aData.w < 0.5) vAlpha *= (1.0 - smoothstep(12.0, 34.0, px)) * smoothstep(8.0, 34.0, -mv.z);
           vCol = color;
           gl_Position = projectionMatrix * mv;
         }`,
@@ -140,12 +150,21 @@ export class Particles extends THREE.Points {
     // ---- wingtip vapour: only when the wing is working hard in humid, low air -------
     // A fighter reaches the load factor that makes vortices visible far more often, and
     // its tips trail a tight, persistent core rather than a wisp.
+    // Tip condensation needs a genuinely loaded wing. Starting it at 2.6 g meant a
+    // routine turn produced a handful of puffs spread far enough apart to read as
+    // floating white balls rather than a cord; from 4 g the emission is dense enough
+    // to overlap into one, which is also where the real thing appears.
     const gPull = jet
-      ? clamp((Math.abs(s.gLoad) - 2.6) / 3.0, 0, 1)
-      : clamp((Math.abs(s.gLoad) - 1.9) / 1.6, 0, 1);
+      ? clamp((Math.abs(s.gLoad) - 4.0) / 2.6, 0, 1)
+      : clamp((Math.abs(s.gLoad) - 2.3) / 1.4, 0, 1);
     const humid = 1 - smoothstep(jet ? 2200 : 400, jet ? 6000 : 1600, s.altitude);
-    const vapour = gPull * humid * smoothstep(28, 45, s.airspeed) * (jet ? 1.6 : 1);
-    this.vapourTimer += dt * vapour * (jet ? 150 : 90);
+    const vapour = gPull * humid * smoothstep(28, 45, s.airspeed);
+    // Emit per metre flown, not per second. A fixed rate leaves the puffs fifteen metres
+    // apart at fighter speed, which reads as a string of white balls rather than a cord
+    // of vapour; tying the rate to the distance covered keeps the spacing constant and
+    // lets the sprites overlap into a continuous core at any speed.
+    const perMetre = jet ? 1.15 : 0.55;
+    this.vapourTimer += vapour * perMetre * s.airspeed * dt;
     while (this.vapourTimer >= 1) {
       this.vapourTimer -= 1;
       const tips = jet ? ['Wingtip_L', 'Wingtip_R', 'LERX_L', 'LERX_R'] : ['Wingtip_L', 'Wingtip_R'];
@@ -158,7 +177,12 @@ export class Particles extends THREE.Points {
           -velocity.x * 0.06 + (Math.random() - 0.5) * 1.2,
           -velocity.y * 0.06 + (Math.random() - 0.5) * 0.8,
           -velocity.z * 0.06 + (Math.random() - 0.5) * 1.2,
-          0.55 + Math.random() * 0.5, 0.30 + Math.random() * 0.20, 0, 0.95, 0.97, 1.0);
+          // A vortex core is a thin continuous thread, not a row of puffs. Small, dense
+          // and short-lived is what makes the sprites merge into one: a longer life just
+          // spends particles on trail that is already behind the camera.
+          // Condensation is lit by the sky, not by the sun: near white blows out against
+          // a dark sea and every stray puff becomes a highlight.
+          0.28 + Math.random() * 0.22, 0.10 + Math.random() * 0.08, 0, 0.68, 0.72, 0.80);
       }
     }
 

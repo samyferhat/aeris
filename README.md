@@ -115,9 +115,14 @@ terme de diffusion multiple qui blanchit l'horizon au lieu de le laisser virer a
 Pour les surfaces, la même physique est intégrée analytiquement : c'est vingt fois moins
 cher et indiscernable jusqu'à une vingtaine de kilomètres.
 
-**Nuages.** Couche volumétrique traversable, raymarchée au quart de résolution contre le
+**Nuages.** Couche volumétrique traversable, raymarchée à la demi-résolution contre le
 tampon de profondeur, avec du bruit Perlin-Worley 3D, une carte météo, un éclairage de
-Beer-Powder et des rayons crépusculaires lorsqu'on les perce.
+Beer-Powder et des rayons crépusculaires lorsqu'on les perce. Le pas de marche croît
+géométriquement le long du rayon : les nuages proches, où l'œil lit la forme, sont
+échantillonnés tous les trente mètres, et les échantillons grossiers sont dépensés au
+loin où la perspective aérienne a déjà tout lavé. À pas constant il aurait fallu 270 m
+pour atteindre l'horizon, soit un pas plus large que les cumulus eux-mêmes, et le bruit
+de décorrélation censé masquer ça ressortait en damier sur toute la couche.
 
 **Océan.** Six vagues de Gerstner en espace monde, normales de détail défilantes, écume
 de crête et de rivage calculée depuis la profondeur d'eau, courbure terrestre pour que
@@ -149,6 +154,34 @@ bang supersonique au franchissement.
 écran, bloom sélectif, flou de mouvement par reprojection, profondeur de champ en
 cockpit, halo d'objectif sobre, grain et vignettage. La résolution interne s'ajuste
 toute seule pour tenir la cadence.
+
+## Images
+
+![Post-combustion](docs/11-mig-postcombustion.jpg)
+*MiG-29 plein réchauffe au-dessus de l'archipel, caméra cinématique.*
+
+![MiG-29 au sol](docs/12-mig-exterieur.jpg)
+*Livrée camouflage bicolore, étoiles rouges, numéro de bord 042, train sorti.*
+
+![Cockpit MiG](docs/10-mig-cockpit.jpg)
+*Planche de bord soviétique, cadrans cyrilliques, collimateur tête haute.*
+
+![Cessna sur la piste](docs/05-piste.jpg)
+*Cessna 172 au seuil de piste, lumière du matin.*
+
+## Limites connues
+
+- L'intérieur du cockpit du MiG est le point faible du projet : la géométrie est
+  correcte et les instruments fonctionnent, mais la matière et les détails de cabine ne
+  sont pas au niveau du reste. La symbologie du collimateur est lisible mais mal centrée
+  sur la glace.
+- Les vortex de bout d'aile sont rendus en sprites ; ils se lisent comme un filet de
+  vapeur, pas encore comme le cordon torsadé du phénomène réel. Un ruban géométrique
+  suivant la trajectoire du saumon serait la bonne primitive.
+- Les cadences en images par seconde n'ont jamais été mesurées dans un onglet visible,
+  seulement par requêtes de temps GPU : les chiffres relatifs entre passes sont fiables,
+  la valeur absolue ne l'est pas.
+
 
 ## Assets
 

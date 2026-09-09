@@ -87,6 +87,13 @@ export class CameraRig {
       const target = pos.clone().addScaledVector(flatFwd, -dist).addScaledVector(new THREE.Vector3(0, 1, 0), height);
       const k = 1 - Math.exp(-dt * (s.onGround ? 4 : 2.6));
       if (this.chasePos.lengthSq() === 0) this.chasePos.copy(target);
+      // Carry the camera along at the aircraft's own velocity before relaxing toward
+      // the ideal offset. A plain lerp on to a moving target settles at a lag of
+      // speed / rate, which is 27 m on the trainer and over 100 m on the fighter: the
+      // aircraft shrinks to a dot exactly when the flying gets interesting. Advancing
+      // first leaves the smoothing to act on the offset alone, so the framing holds at
+      // any speed and the spring still absorbs manoeuvres.
+      this.chasePos.addScaledVector(fm.velocity, dt);
       this.chasePos.lerp(target, k);
       // camera roll: a fraction of the aircraft bank, lagging
       const desiredUp = new THREE.Vector3(0, 1, 0).lerp(up, 0.35).normalize();
@@ -96,6 +103,7 @@ export class CameraRig {
       // of the lower edge of the frame — which is what happens on a fast jet if the
       // look-ahead scales with the chase distance as freely as it can on a trainer.
       const lookAhead = cfg.chaseDistance * (0.8 + 0.9 * speedN);
+      this.lookTarget.addScaledVector(fm.velocity, dt);   // same reason as the position
       this.lookTarget.lerp(
         pos.clone().addScaledVector(fwd, lookAhead).addScaledVector(fm.velocity, 0.08),
         1 - Math.exp(-dt * 5));
@@ -104,7 +112,11 @@ export class CameraRig {
       // Field of view opens with speed, and again when the reheat lights — the visual
       // shorthand for acceleration that every fast game uses, kept subtle enough to
       // feel like pressure rather than a zoom.
-      const fov = cfg.fovBase + cfg.fovSpeed * speedN * speedN + 9 * s.afterburner;
+      // speedN runs to 1.4, so squaring it unclamped took the fighter to a 112 degree
+      // fish-eye in reheat and shrank the aircraft to a smudge. The widening is a speed
+      // cue, not a zoom out: cap it at the reference speed and keep the reheat kick small.
+      const fovN = Math.min(1, speedN);
+      const fov = cfg.fovBase + cfg.fovSpeed * fovN * fovN + 5 * s.afterburner;
       cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-dt * 2));
     } else {
       this.orbit.theta -= orbitDelta.x * 0.005;

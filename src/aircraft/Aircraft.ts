@@ -6,6 +6,7 @@ import { applyLivery, applyCockpitMetal, applyTyre, applyCabinTrim, applyMigLive
 import { Instruments } from './Instruments';
 import { InstrumentsSoviet } from './InstrumentsSoviet';
 import { HeadUpDisplay } from './HeadUpDisplay';
+import { remapGaugeUVs, planarUV } from './GaugeUV';
 import { AircraftConfig } from './AircraftConfig';
 import { clamp, lerp } from '../core/Noise';
 
@@ -76,7 +77,8 @@ export class Aircraft extends THREE.Group {
         if (!replacement) {
           const std = m as THREE.MeshStandardMaterial;
           if (std.map) std.map.anisotropy = 8;
-          std.envMapIntensity = INTERIOR_MATERIALS.has(m.name) ? 2.2 : 1.0;
+          const cabin = this.config?.cabinBrightness ?? 1;
+          std.envMapIntensity = INTERIOR_MATERIALS.has(m.name) ? 2.2 * cabin : 1.0;
           if (m.name === 'Paint_Body') {
             replacement = applyLivery(std);
           } else if (m.name === 'Paint_Camo') {
@@ -93,7 +95,11 @@ export class Aircraft extends THREE.Group {
             std.metalness = 0; std.depthWrite = false; std.color.setHex(0x8fd0a8);
             std.emissive = new THREE.Color(0xffffff);
             std.emissiveMap = this.hud.texture;
-            std.emissiveIntensity = 2.4;
+            // A combiner is read against the sky. At 2.4 the symbology vanished the
+            // moment the auto-exposure metered a bright day.
+            std.emissiveIntensity = 7.5;
+            // And give the plate a UV map that the symbology actually fills.
+            planarUV(mesh, 'x', 'y');
             std.alphaMap = this.hud.texture;
             std.blending = THREE.AdditiveBlending;
             mesh.castShadow = false; mesh.renderOrder = 11;
@@ -140,13 +146,18 @@ export class Aircraft extends THREE.Group {
         out.push(replacement);
       }
       mesh.material = Array.isArray(mesh.material) ? out : out[0];
-      // The instrument dials are modelled a centimetre inside their bezels, so the
-      // panel's own recess bottoms hide them. Float them just proud of the surface.
       if (out.some((m) => m.name === 'Gauge_Faces')) {
+        // Some panels model the dial faces a centimetre inside their bezels, where the
+        // recess bottoms hide them; floating them proud fixes that. Only do it when the
+        // dials share a facing: where they point in several directions the mean normal
+        // cancels and the nudge would shove them sideways into the structure.
         const n = mesh.geometry.getAttribute('normal');
         const mean = new THREE.Vector3();
         for (let i = 0; i < n.count; i++) mean.add(_tmpN.fromBufferAttribute(n, i));
-        mesh.position.addScaledVector(mean.normalize(), 0.025);
+        mean.divideScalar(n.count);
+        if (mean.length() > 0.5) mesh.position.addScaledVector(mean.normalize(), 0.025);
+        // And give the dials UVs that match the live atlas, whatever the exporter left.
+        if (this.config?.id === 'mig29') remapGaugeUVs(mesh, 3, 3, 6);
       }
     });
     for (const n of [
@@ -363,7 +374,7 @@ export class Aircraft extends THREE.Group {
       yoke.position.copy(yr.pos).add(new THREE.Vector3(0, 0, -fm.elevator * 0.06));
     }
     // Cabin fill tracks the sky so the interior darkens at dusk like everything else.
-    if (this.cabinLight) this.cabinLight.intensity = 2.6 * (1 - night * 0.85) + 0.25;
+    if (this.cabinLight) this.cabinLight.intensity = (2.6 * (1 - night * 0.85) + 0.25) * (this.config?.cabinBrightness ?? 1);
     // Lights: nav always on at dusk/night, beacon rotating, strobe double-flash
     const nightOn = night > 0.05 ? 1 : 0.15;
     const beacon = 0.5 + 0.5 * Math.sin(this.t * 6.0) > 0.7 ? 1 : 0.05;
