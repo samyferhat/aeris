@@ -64,7 +64,8 @@ src/
   audio/      Audio (moteur, vent, Doppler, réverbération)
   ui/         HUD · TimeSlider
   shaders/    atmosphere · sky · terrain · ocean · clouds · post
-tools/        fetch-assets.py (textures Poly Haven) · pack-textures.py · blender_rpc.py
+tools/        fetch-assets.py (télécharge et empaquette) · shrink-glb.py · blender_rpc.py
+              vite-screenshot-plugin.ts (capture de référence, serveur de dev uniquement)
 blender/      Scripts de modélisation de l'avion, pilotés via le serveur MCP de Blender
 public/       Textures CC0, HDRI, cessna.glb
 ```
@@ -113,6 +114,11 @@ toute seule pour tenir la cadence.
 
 ## Assets
 
-Textures et HDRI : [Poly Haven](https://polyhaven.com), licence CC0, récupérées par
-`tools/fetch-assets.py` puis empaquetées par `tools/pack-textures.py`. La cellule de
-l'avion est modélisée pour ce projet.
+Textures et HDRI : [Poly Haven](https://polyhaven.com), licence CC0. `tools/fetch-assets.py`
+télécharge uniquement ce qui sert et empaquette les jeux du terrain deux fichiers par
+couche (albédo × occlusion, normale + rugosité dans l'alpha), ce qui tient sous la limite
+de 16 échantillonneurs du GPU. La cellule de l'avion est modélisée pour ce projet ;
+`tools/shrink-glb.py` recompresse les textures embarquées dans le glTF.
+
+Le dossier `blender/` ne garde que les scripts de modélisation. Le `.blend`, le cache de
+bake et les rendus de référence en sont dérivés et restent hors du dépôt.
