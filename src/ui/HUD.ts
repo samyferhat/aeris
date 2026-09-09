@@ -1,5 +1,6 @@
 import { FlightState } from '../aircraft/FlightModel';
 import { CameraMode } from '../aircraft/Cameras';
+import { AircraftConfig, CESSNA } from '../aircraft/AircraftConfig';
 
 const MS_TO_KT = 1.94384, M_TO_FT = 3.28084;
 
@@ -14,12 +15,16 @@ export class HUD {
   private warn!: HTMLElement; private camLabel!: HTMLElement; private hint!: HTMLElement; private crash!: HTMLElement;
   private hintTimer = 0;
   visible = true;
+  /** Metric for the Russian jet, imperial for the American light aircraft. */
+  private config: AircraftConfig = CESSNA;
+  private metric = false;
 
   constructor() {
     this.root = document.getElementById('hud')!;
     this.root.innerHTML = `
       <div class="tape speed mono"><div class="strip"></div><div class="box"></div><div class="label">kt · ias</div></div>
       <div class="tape alt mono"><div class="strip"></div><div class="box"></div><div class="label">ft · alt</div></div>
+      <div class="jetline mono"></div>
       <div class="vs mono"></div>
       <div class="heading mono"><div class="strip"></div><div class="cursor"></div><div class="box"></div></div>
       <div class="attitude"><canvas width="520" height="520"></canvas></div>
@@ -27,7 +32,7 @@ export class HUD {
       <div class="status">
         <span>Gaz</span><div class="bar"><i class="thr"></i></div>
         <span>Volets</span><div class="bar"><i class="flap"></i></div>
-        <span>RPM</span><span class="val mono rpm"></span>
+        <span class="rpmlabel">RPM</span><span class="val mono rpm"></span>
         <span>G</span><span class="val mono g"></span>
       </div>
       <div class="cammode"></div>
@@ -40,9 +45,34 @@ export class HUD {
     this.att = q('.attitude canvas') as HTMLCanvasElement; this.ctx = this.att.getContext('2d')!;
     this.thrBar = q('.thr'); this.flapBar = q('.flap'); this.rpmVal = q('.rpm'); this.gVal = q('.g');
     this.warn = q('.warn'); this.camLabel = q('.cammode'); this.hint = q('.hint'); this.crash = q('.crash');
-    this.buildTape(this.speedStrip, 0, 200, 10, 2.6, true);
-    this.buildTape(this.altStrip, -500, 12000, 100, 0.45, false);
+    this.jetline = q('.jetline'); this.rpmLabel = q('.rpmlabel');
     this.buildHeading();
+    this.setConfig(CESSNA);
+  }
+
+  private jetline!: HTMLElement;
+  private rpmLabel!: HTMLElement;
+
+  /** Rebuilds the tapes for the aircraft's units and speed range. */
+  setConfig(config: AircraftConfig) {
+    this.config = config;
+    this.metric = config.id === 'mig29';
+    this.speedStrip.innerHTML = '';
+    this.altStrip.innerHTML = '';
+    if (this.metric) {
+      this.buildTape(this.speedStrip, 0, 2600, 100, 0.30, true);
+      this.buildTape(this.altStrip, -200, 20000, 200, 0.10, false);
+      (this.root.querySelector('.tape.speed .label') as HTMLElement).textContent = 'km/h · vi';
+      (this.root.querySelector('.tape.alt .label') as HTMLElement).textContent = 'm · alt';
+      this.rpmLabel.textContent = 'N1';
+    } else {
+      this.buildTape(this.speedStrip, 0, 200, 10, 2.6, true);
+      this.buildTape(this.altStrip, -500, 12000, 100, 0.45, false);
+      (this.root.querySelector('.tape.speed .label') as HTMLElement).textContent = 'kt · ias';
+      (this.root.querySelector('.tape.alt .label') as HTMLElement).textContent = 'ft · alt';
+      this.rpmLabel.textContent = 'RPM';
+    }
+    this.jetline.style.display = this.metric ? 'block' : 'none';
   }
 
   toggle() { this.visible = !this.visible; this.root.classList.toggle('hidden', !this.visible); }
@@ -69,21 +99,33 @@ export class HUD {
   }
 
   update(s: FlightState, mode: CameraMode, dt: number, crashed: boolean) {
-    const kt = s.airspeed * MS_TO_KT, ft = s.altitude * M_TO_FT;
-    this.speedStrip.style.transform = `translateY(${kt * (this.speedStrip as any)._ppu}px)`;
-    this.speedBox.textContent = Math.round(kt).toString().padStart(3, ' ');
-    this.altStrip.style.transform = `translateY(${ft * (this.altStrip as any)._ppu}px)`;
-    this.altBox.textContent = Math.round(ft / 10) * 10 + '';
-    const fpm = Math.round(s.verticalSpeed * M_TO_FT * 60 / 50) * 50;
-    this.vs.textContent = (fpm > 0 ? '▲ ' : fpm < 0 ? '▼ ' : '  ') + Math.abs(fpm) + ' fpm';
+    const speed = this.metric ? s.indicatedSpeed * 3.6 : s.airspeed * MS_TO_KT;
+    const alt = this.metric ? s.altitude : s.altitude * M_TO_FT;
+    this.speedStrip.style.transform = `translateY(${speed * (this.speedStrip as any)._ppu}px)`;
+    this.speedBox.textContent = Math.round(speed).toString().padStart(3, ' ');
+    this.altStrip.style.transform = `translateY(${alt * (this.altStrip as any)._ppu}px)`;
+    this.altBox.textContent = Math.round(alt / 10) * 10 + '';
+    if (this.metric) {
+      const ms = Math.round(s.verticalSpeed);
+      this.vs.textContent = (ms > 0 ? '▲ ' : ms < 0 ? '▼ ' : '  ') + Math.abs(ms) + ' m/s';
+      // Mach, load factor and the reheat state: what a fast jet is actually flown on.
+      const ab = s.afterburner > 0.05 ? `<b>ФОРСАЖ</b>` : '';
+      const gear = s.gear > 0.02 && s.gear < 0.98 ? ' · train' : '';
+      this.jetline.innerHTML = `M ${s.mach.toFixed(2)} &nbsp; ${s.gLoad.toFixed(1)} g &nbsp; ${ab}${gear}`;
+      this.jetline.classList.toggle('hot', s.afterburner > 0.05);
+    } else {
+      const fpm = Math.round(s.verticalSpeed * M_TO_FT * 60 / 50) * 50;
+      this.vs.textContent = (fpm > 0 ? '▲ ' : fpm < 0 ? '▼ ' : '  ') + Math.abs(fpm) + ' fpm';
+    }
     const hdg = (s.heading * 180 / Math.PI);
     this.headStrip.style.transform = `translateX(${-hdg * 2.4}px)`;
     this.headBox.textContent = String(Math.round(hdg) % 360).padStart(3, '0') + '°';
     this.thrBar.style.width = `${s.throttle * 100}%`;
     this.flapBar.style.width = `${s.flaps * 100}%`;
-    this.rpmVal.textContent = String(Math.round(s.rpm / 10) * 10);
+    this.rpmVal.textContent = this.metric ? `${Math.round(s.rpm)}%` : String(Math.round(s.rpm / 10) * 10);
     this.gVal.textContent = s.gLoad.toFixed(1);
-    this.warn.classList.toggle('on', s.stall > 0.35 && !s.onGround);
+    this.warn.textContent = s.overG > 0.2 ? 'SURCHARGE' : 'STALL';
+    this.warn.classList.toggle('on', (s.stall > 0.35 && !s.onGround) || s.overG > 0.2);
     this.camLabel.textContent = mode === 'chase' ? 'caméra · poursuite' : mode === 'cockpit' ? 'caméra · cockpit' : 'caméra · libre';
     this.crash.classList.toggle('on', crashed);
     if (s.airspeed > 15) this.hintTimer += dt;

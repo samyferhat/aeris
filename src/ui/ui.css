@@ -101,3 +101,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .sel-card:hover .sel-go, .sel-card.on .sel-go { background: var(--accent); border-color: var(--accent); color: #14100a; }
 .sel-foot { font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
 @media (max-width: 900px) { .sel-cards { flex-direction: column; } .sel-card { width: min(86vw, 460px); } .sel-stage { height: 24vh; } }
+
+.jetline { position: absolute; left: 50%; top: calc(50% + 176px); transform: translateX(-50%);
+  font-size: 13px; letter-spacing: 2px; color: var(--hud-dim); white-space: nowrap; }
+.jetline b { color: var(--accent); font-weight: 500; letter-spacing: 3px; }
+.jetline.hot { color: var(--hud); }

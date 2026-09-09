@@ -1,7 +1,7 @@
 # AERIS
 
-Mini simulateur de vol photoréaliste dans le navigateur. Un monomoteur type Cessna 172,
-un archipel d'environ 10 km², une piste : décoller, voler, se poser.
+Mini simulateur de vol photoréaliste dans le navigateur. Deux appareils — un Cessna 172
+et un MiG-29 — un archipel d'environ 10 km², une piste : décoller, voler, se poser.
 
 ![AERIS](docs/hero.jpg)
 
@@ -23,6 +23,8 @@ secondes), puis télécharge les textures. Les suivants sont servis par le cache
 
 ## Commandes
 
+Un écran de choix s'affiche avant le vol. `?aircraft=mig29` le contourne.
+
 | Action | Clavier / souris | Manette |
 |---|---|---|
 | Tangage (cabrer / piquer) | ↓ / ↑, ou souris après un clic droit | Stick gauche |
@@ -36,10 +38,30 @@ secondes), puis télécharge les textures. Les suivants sont servis par le cache
 | Heure du jour | Curseur en bas, ou [ et ] | LB / RB |
 | Remettre sur la piste | R | Start |
 | Pause | P ou Échap | Select |
+| Train d'atterrissage (MiG) | G | Stick droit enfoncé |
 | Masquer l'ATH | H | — |
 | Couper le son | M | — |
 
 Le son démarre au premier clic ou à la première touche, comme l'exige le navigateur.
+
+## Les deux appareils
+
+Ils ne se pilotent pas du tout pareil, et c'est voulu.
+
+Le **Cessna** pèse une tonne, décolle à 55 kt, monte à 900 ft/min et se stabilise tout
+seul dès qu'on lâche le manche. Il pardonne : la protection d'incidence retire
+progressivement de l'autorité à cabrer près du décrochage, si bien qu'un manche tiré à
+fond donne un enfoncement et non un départ en vrille.
+
+Le **MiG-29** pèse quatorze tonnes et sort 163 kN avec les deux réchauffes allumées. La
+poussée est là mais les réacteurs mettent deux secondes et demie à monter en régime,
+donc il se pilote en anticipant. Il roule à 60°/s, encaisse 9 g, et l'aile continue de
+porter bien au-delà de l'incidence où le Cessna aurait renoncé. En contrepartie
+l'inertie est écrasante : un renversement se prépare, il ne s'improvise pas. La
+stabilisation automatique est presque absente. Poussée maximale, la post-combustion
+s'allume dans le dernier cran de manette, le champ de vision s'ouvre, la flamme éclaire
+le fuselage et l'air derrière les tuyères se met à onduler. Au-delà de 4 g le voile gris
+commence à fermer la vision périphérique.
 
 ## Repères de pilotage
 
@@ -103,9 +125,21 @@ tôle, rivets, traînées d'échappement, crasse de ventre et usure de bord d'at
 couture d'UV ni limite de résolution. Le tableau de bord est redessiné en direct depuis
 l'état de vol : les six instruments de base fonctionnent réellement.
 
-**Vol.** Modèle six degrés de liberté en coefficients aérodynamiques classiques, avec
-décrochage progressif, effet dièdre, lacet inverse et souffle hélicoïdal. Une
-stabilisation douce n'agit que manche au neutre.
+**Vol.** Modèle six degrés de liberté en coefficients aérodynamiques classiques, piloté
+par une configuration par appareil : masse, inerties, portance, traînée d'onde
+transsonique, autorité des gouvernes, poussée et train rentrant. Atmosphère standard, si
+bien que la densité et la vitesse du son varient avec l'altitude — ce qui donne au
+chasseur sa perte de poussée en montée et son nombre de Mach. Décrochage progressif,
+effet dièdre, lacet inverse, souffle hélicoïdal pour l'hélice. Une stabilisation douce
+n'agit que manche au neutre, et beaucoup moins sur le chasseur.
+
+**Effets du chasseur.** La post-combustion est dessinée en trois temps : la flamme
+elle-même, avec son cœur bleu-blanc et les disques de choc régulièrement espacés ; la
+lumière qu'elle projette sur la cellule et sur la piste ; et l'air qu'elle chauffe, rendu
+dans un tampon dédié que la passe de composition lit comme un décalage en espace écran.
+S'y ajoutent le cône de vapeur transsonique, la nappe de condensation sur l'extrados à
+forte charge, les vortex de bout d'aile, les traînées de condensation en altitude et le
+bang supersonique au franchissement.
 
 **Image.** Exposition automatique pondérée au centre, ACES, occlusion ambiante en espace
 écran, bloom sélectif, flou de mouvement par reprojection, profondeur de champ en

@@ -73,18 +73,14 @@ def airfoil_slice(c0, c1, tc, n=16):
     us = [c0 + (c1 - c0) * (0.5 - 0.5 * math.cos(math.pi * i / (n - 1)))
           for i in range(n)]
     up = [(u, naca_half(tc, u)) for u in us]
-    lo = [(u, -naca_half(tc, u)) for u in reversed(us)]
-    if c0 <= 1e-6:
-        # round nose: drop the duplicated leading point
-        loop = up + lo[1:-1]
-    else:
-        loop = up + lo
-        # dedupe endpoints that coincide (thickness ~0 at c1 == 1)
+    lo = [(u, -naca_half(tc, u)) for u in us]
+    loop = up + list(reversed(lo))
     out = []
     for p in loop:
-        if not out or (abs(p[0] - out[-1][0]) > 1e-7 or abs(p[1] - out[-1][1]) > 1e-7):
-            out.append(p)
-    if abs(out[0][0] - out[-1][0]) < 1e-7 and abs(out[0][1] - out[-1][1]) < 1e-7:
+        if out and abs(p[0] - out[-1][0]) < 1e-7 and abs(p[1] - out[-1][1]) < 1e-7:
+            continue
+        out.append(p)
+    while len(out) > 3 and abs(out[0][0] - out[-1][0]) < 1e-7 and abs(out[0][1] - out[-1][1]) < 1e-7:
         out.pop()
     return out
 
@@ -280,7 +276,7 @@ def finish(ob, bevel=0.008, seg=2, angle=math.radians(34), smooth=True):
         m.angle_limit = math.radians(38)
         m.harden_normals = False
         m.miter_outer = 'MITER_ARC'
-        m.clamp_overlap = True
+        m.use_clamp_overlap = True
     if smooth:
         m = ob.modifiers.new('es', 'EDGE_SPLIT')
         m.split_angle = angle
@@ -329,7 +325,10 @@ def make_mat(name, base, rough=0.5, metal=0.0, alpha=1.0, ior=1.45):
         b.inputs['IOR'].default_value = ior
     if alpha < 1.0:
         b.inputs['Alpha'].default_value = alpha
-        m.blend_method = 'BLEND'
+        try:
+            m.blend_method = 'BLEND'
+        except Exception:
+            pass
         try:
             m.surface_render_method = 'BLENDED'
         except Exception:

@@ -131,11 +131,21 @@ void main(){
     float dsun = length(p);
     float glow = exp(-dsun * 9.0) * 0.35 + exp(-dsun * 1.6) * 0.06;
     float streak = exp(-abs(p.y) * 220.0) * exp(-abs(p.x) * 2.2) * 0.25;   // anamorphic hint
+    // Ghosts: small, faint, and only while the sun is genuinely in or near the frame.
+    // The first cut drew four discs the size of a fist, which read as a bug rather than
+    // as a lens.
+    float inFrame = (1.0 - smoothstep(0.55, 1.15, length(s - c)));
     float ghosts = 0.0;
-    for (int i = 1; i <= 4; i++) { vec2 g = s + toC * (0.35 * float(i)) ; vec2 q = vUv - g; q.x *= uAspect;
-      float r = 0.025 + 0.02 * float(i); ghosts += smoothstep(r, r * 0.6, length(q)) * 0.05 / float(i); }
+    for (int i = 1; i <= 4; i++) {
+      vec2 g = s + toC * (0.42 * float(i));
+      vec2 q = vUv - g; q.x *= uAspect;
+      float r = 0.010 + 0.008 * float(i);
+      ghosts += smoothstep(r, r * 0.45, length(q)) * 0.018 / float(i);
+    }
+    ghosts *= inFrame;
     vec3 tint = mix(uSunColor, vec3(0.7, 0.85, 1.0), 0.4);
     col += tint * (glow + streak + ghosts) * uSunVisible * uFlareStrength;
+    // (glow and streak are anchored on the sun itself, so they need no extra gating)
   }
   gl_FragColor = vec4(col, 1.0); }`;
 

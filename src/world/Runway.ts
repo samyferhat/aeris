@@ -7,11 +7,11 @@ export class Runway extends THREE.Group {
   readonly lights: THREE.InstancedMesh;
   private lightMat: THREE.MeshStandardMaterial;
 
-  constructor(loader: THREE.TextureLoader) {
+  constructor(loader: THREE.TextureLoader, maxTextureSize = 8192) {
     super();
     const tex = (p: string, srgb = false) => { const t = loader.load(p); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; t.anisotropy = 16; return t; };
     const diff = tex('/textures/runway/diff.jpg', true), nor = tex('/textures/runway/nor.jpg'), rough = tex('/textures/runway/rough.jpg'), ao = tex('/textures/runway/ao.jpg');
-    const marks = Runway.markingsTexture();
+    const marks = Runway.markingsTexture(maxTextureSize);
     const L = RUNWAY.length, W = RUNWAY.width;
     const mat = new THREE.MeshStandardMaterial({ map: diff, normalMap: nor, roughnessMap: rough, aoMap: ao, roughness: 1.0, metalness: 0, color: 0xb8b8b8 });
     mat.normalScale.set(0.6, 0.6);
@@ -73,8 +73,16 @@ export class Runway extends THREE.Group {
 
   setNight(night: number) { this.lightMat.emissiveIntensity = 4 * night + 0.02; }
 
-  static markingsTexture(): THREE.CanvasTexture {
-    const W = 4096, H = 128; // along runway, across
+  /**
+   * Painted markings, drawn once onto a canvas stretched over the strip.
+   *
+   * Resolution matters more than it looks: the aircraft starts a few metres from the
+   * threshold, so the runway designator is magnified enormously and a coarse texture
+   * turns it into two grey smudges. 8192 x 512 gives about seven pixels per metre along
+   * the strip and seventeen across, which holds up from the cockpit.
+   */
+  static markingsTexture(maxSize = 8192): THREE.CanvasTexture {
+    const W = Math.min(8192, maxSize), H = Math.min(512, maxSize >> 4); // along runway, across
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const g = c.getContext('2d')!;
     g.clearRect(0, 0, W, H);

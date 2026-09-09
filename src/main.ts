@@ -55,7 +55,7 @@ async function boot() {
   scene.add(terrain);
   const ocean = new Ocean(hf);
   scene.add(ocean);
-  const runway = new Runway(texLoader);
+  const runway = new Runway(texLoader, renderer.capabilities.maxTextureSize);
   scene.add(runway);
   progress(0.5, 'Végétation');
   const vegetation = new Vegetation(hf);
@@ -94,6 +94,7 @@ async function boot() {
     fm.setConfig(cfg);
     rig.setConfig(cfg);
     audio.setProfile(cfg.propulsion);
+    hud.setConfig(cfg);
     post.heatHaze = cfg.propulsion === 'turbofan';
     if (!aircraft) return;
     scene.add(aircraft);
@@ -118,7 +119,7 @@ async function boot() {
       jetEffects = new JetEffects(cfg.span, 17);
       aircraft.add(jetEffects);
     }
-    fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2);
+    fm.resetOnRunway(RUNWAY.x - 420, RUNWAY.z, RUNWAY.y, Math.PI / 2);
   };
 
   const particles = new Particles();
@@ -144,7 +145,7 @@ async function boot() {
   input.onAction = (a) => {
     switch (a) {
       case 'camera': rig.next(); break;
-      case 'reset': fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2); break;
+      case 'reset': fm.resetOnRunway(RUNWAY.x - 420, RUNWAY.z, RUNWAY.y, Math.PI / 2); break;
       case 'pause': paused = !paused; break;
       case 'flapsUp': input.controls.flaps = Math.max(0, input.controls.flaps - 1 / 3); break;
       case 'flapsDown': input.controls.flaps = Math.min(1, input.controls.flaps + 1 / 3); break;
