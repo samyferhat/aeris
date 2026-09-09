@@ -92,7 +92,13 @@ export class CameraRig {
       const desiredUp = new THREE.Vector3(0, 1, 0).lerp(up, 0.35).normalize();
       this.chaseUp.lerp(desiredUp, 1 - Math.exp(-dt * 2)).normalize();
       cam.position.copy(this.chasePos).add(this.shakeVec.clone().multiplyScalar(0.6));
-      this.lookTarget.lerp(pos.clone().addScaledVector(fwd, cfg.chaseDistance * (0.85 + 2.1 * speedN)).addScaledVector(fm.velocity, 0.15), 1 - Math.exp(-dt * 5));
+      // Look ahead of the aircraft, but not so far that the aircraft itself drops out
+      // of the lower edge of the frame — which is what happens on a fast jet if the
+      // look-ahead scales with the chase distance as freely as it can on a trainer.
+      const lookAhead = cfg.chaseDistance * (0.8 + 0.9 * speedN);
+      this.lookTarget.lerp(
+        pos.clone().addScaledVector(fwd, lookAhead).addScaledVector(fm.velocity, 0.08),
+        1 - Math.exp(-dt * 5));
       cam.up.copy(this.chaseUp);
       cam.lookAt(this.lookTarget);
       // Field of view opens with speed, and again when the reheat lights — the visual
