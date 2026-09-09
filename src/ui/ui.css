@@ -1,0 +1,66 @@
+:root { --hud: rgba(235, 242, 248, 0.82); --hud-dim: rgba(235, 242, 248, 0.42); --accent: #ffd27a; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: 'Inter', system-ui, sans-serif; color: var(--hud); }
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+#hud { position: fixed; inset: 0; pointer-events: none; user-select: none; text-shadow: 0 1px 2px rgba(0,0,0,.6); transition: opacity .3s; }
+#hud.hidden { opacity: 0; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* tapes */
+.tape { position: absolute; top: 50%; transform: translateY(-50%); width: 92px; height: 240px; overflow: hidden; }
+.tape.speed { left: max(28px, 6vw); } .tape.alt { right: max(28px, 6vw); }
+.tape .strip { position: absolute; left: 0; right: 0; top: 50%; }
+.tape .tick { position: absolute; left: 0; right: 0; height: 1px; font-size: 12px; font-weight: 300; color: var(--hud-dim); }
+.tape.speed .tick { text-align: right; padding-right: 14px; } .tape.speed .tick::after { content: ''; position: absolute; right: 0; top: 0; width: 8px; height: 1px; background: var(--hud-dim); }
+.tape.alt .tick { text-align: left; padding-left: 14px; } .tape.alt .tick::after { content: ''; position: absolute; left: 0; top: 0; width: 8px; height: 1px; background: var(--hud-dim); }
+.tape .tick span { position: relative; top: -8px; }
+.tape .box { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(8, 14, 22, 0.55); border: 1px solid rgba(255,255,255,.28); padding: 4px 8px; font-size: 20px; font-weight: 500; letter-spacing: .5px; backdrop-filter: blur(6px); border-radius: 3px; }
+.tape.speed .box { right: 0; } .tape.alt .box { left: 0; }
+.tape .label { position: absolute; bottom: -22px; width: 100%; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); }
+.tape.speed .label { text-align: right; } .tape.alt .label { text-align: left; }
+.tape .mask { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,.0) 0%, transparent 25%, transparent 75%, rgba(0,0,0,0) 100%); }
+.vs { position: absolute; top: 50%; right: max(28px, 6vw); transform: translate(0, 140px); font-size: 12px; color: var(--hud-dim); width: 92px; text-align: left; }
+
+/* heading */
+.heading { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); width: 320px; height: 44px; overflow: hidden; }
+.heading .strip { position: absolute; top: 0; left: 50%; height: 100%; }
+.heading .htick { position: absolute; top: 22px; width: 1px; height: 8px; background: var(--hud-dim); }
+.heading .htick.major { height: 12px; top: 18px; background: var(--hud); }
+.heading .htick .lbl { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-size: 12px; white-space: nowrap; }
+.heading .cursor { position: absolute; left: 50%; top: 32px; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 8px solid var(--accent); }
+.heading .box { position: absolute; left: 50%; top: 44px; transform: translateX(-50%); font-size: 14px; }
+.heading .fade { position: absolute; inset: 0; background: linear-gradient(to right, rgba(0,0,0,.0), transparent 20%, transparent 80%, rgba(0,0,0,0)); }
+
+/* attitude */
+.attitude { position: absolute; left: 50%; top: 50%; width: 260px; height: 260px; transform: translate(-50%, -50%); }
+.attitude canvas { width: 100%; height: 100%; }
+
+/* bottom-left status */
+.status { position: absolute; left: max(28px, 6vw); bottom: 28px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--hud-dim); display: grid; grid-template-columns: 70px 90px; row-gap: 6px; align-items: center; }
+.status .bar { height: 3px; background: rgba(255,255,255,.14); border-radius: 2px; overflow: hidden; }
+.status .bar i { display: block; height: 100%; background: var(--hud); width: 0; transition: width .12s; }
+.status .val { color: var(--hud); }
+.warn { position: absolute; left: 50%; top: calc(50% + 150px); transform: translateX(-50%); font-size: 12px; letter-spacing: 4px; color: var(--accent); opacity: 0; transition: opacity .15s; }
+.warn.on { opacity: 1; animation: blink 0.6s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+.cammode { position: absolute; right: max(28px, 6vw); bottom: 28px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); text-align: right; }
+.hint { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); font-size: 11px; letter-spacing: 1px; color: var(--hud-dim); opacity: .8; transition: opacity 1s; }
+.hint.gone { opacity: 0; }
+
+/* time slider */
+.timectl { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(420px, 60vw); display: flex; align-items: center; gap: 12px; pointer-events: auto; font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
+.timectl input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; height: 2px; background: rgba(255,255,255,.25); border-radius: 1px; outline: none; cursor: pointer; }
+.timectl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--hud); border: 1px solid rgba(0,0,0,.4); box-shadow: 0 0 0 4px rgba(255,255,255,.12); }
+.timectl .clock { font-family: 'JetBrains Mono', monospace; color: var(--hud); font-size: 13px; letter-spacing: 1px; min-width: 48px; }
+
+/* overlay */
+#overlay { position: fixed; inset: 0; background: #06090d; display: flex; align-items: center; justify-content: center; z-index: 10; transition: opacity .8s; }
+#overlay.gone { opacity: 0; pointer-events: none; }
+#loading { text-align: center; width: 280px; }
+#loading .brand { font-weight: 300; font-size: 34px; letter-spacing: 16px; padding-left: 16px; margin-bottom: 26px; }
+#loading .bar { height: 1px; background: rgba(255,255,255,.15); }
+#loading .bar .fill { height: 100%; width: 0; background: #fff; transition: width .3s; }
+#loading .msg { margin-top: 14px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); }
+.crash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0,0,0,.35); font-weight: 300; letter-spacing: 6px; font-size: 22px; opacity: 0; pointer-events: none; transition: opacity .5s; }
+.crash.on { opacity: 1; }
+.crash small { font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
