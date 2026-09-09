@@ -34,7 +34,7 @@ void main() {
   float radius = uRadius * (1.0 + dist * 0.02);
   float ao = 0.0;
   float rot = hash12(gl_FragCoord.xy + fract(uFrame * 0.3819) * 37.0) * 6.2831;
-  const int DIRS = 6; const int STEPS = 4;
+  const int DIRS = 4; const int STEPS = 3;
   for (int d = 0; d < DIRS; d++) {
     float a = rot + float(d) * (6.2831 / float(DIRS));
     vec2 dir = vec2(cos(a), sin(a));
@@ -94,7 +94,7 @@ void main(){
 export const compositeFrag = /* glsl */ `
 precision highp float;
 uniform sampler2D tScene; uniform sampler2D tClouds; uniform sampler2D tDepth; uniform sampler2D tGod; uniform sampler2D tAO;
-uniform vec2 uHalfTexel; uniform vec2 uSunScreen; uniform float uSunVisible; uniform vec3 uSunColor; uniform float uGodStrength;
+uniform vec2 uCloudTexel; uniform vec2 uSunScreen; uniform float uSunVisible; uniform vec3 uSunColor; uniform float uGodStrength;
 uniform float uAOStrength; uniform float uFlareStrength; uniform float uAspect; uniform float uNear; uniform float uFar;
 varying vec2 vUv;
 float linearDepth(float z) { float ndc = z * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear)); }
@@ -102,12 +102,12 @@ void main(){
   vec4 scene = texture2D(tScene, vUv);
   float zc = texture2D(tDepth, vUv).x; float dc = linearDepth(zc);
   // depth-aware upsample of the half-res cloud buffer
-  vec2 base = (floor(vUv / uHalfTexel - 0.5) + 0.5) * uHalfTexel;
+  vec2 base = (floor(vUv / uCloudTexel - 0.5) + 0.5) * uCloudTexel;
   vec4 acc = vec4(0.0); float wsum = 0.0;
   for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
-    vec2 uv = base + vec2(float(i), float(j)) * uHalfTexel;
+    vec2 uv = base + vec2(float(i), float(j)) * uCloudTexel;
     float zs = texture2D(tDepth, uv).x; float ds = linearDepth(zs);
-    vec2 f = abs(vUv - uv) / uHalfTexel; float wb = (1.0 - min(f.x, 1.0)) * (1.0 - min(f.y, 1.0));
+    vec2 f = abs(vUv - uv) / uCloudTexel; float wb = (1.0 - min(f.x, 1.0)) * (1.0 - min(f.y, 1.0));
     float wd = 1.0 / (1.0 + abs(ds - dc) * 0.02);
     float w = wb * wd + 1e-4;
     acc += texture2D(tClouds, uv) * w; wsum += w; }

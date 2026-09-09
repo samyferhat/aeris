@@ -25,6 +25,8 @@ export class CameraRig {
   private lookTarget = new THREE.Vector3();
   private initialised = false;
   private tmpQ = new THREE.Quaternion();
+  /** The aircraft's nose is +Z, a Three.js camera looks down -Z: hence the half turn. */
+  private static readonly NOSE_TO_VIEW = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 60000);
@@ -59,7 +61,8 @@ export class CameraRig {
       this.headLag.lerp(accelBody, 1 - Math.exp(-dt * 6));
       const eye = this.pilotEye.clone().add(this.headLag).add(this.shakeVec.clone().multiplyScalar(0.25));
       cam.position.copy(eye.applyQuaternion(q).add(pos));
-      cam.quaternion.copy(q);
+      cam.quaternion.copy(q).multiply(CameraRig.NOSE_TO_VIEW);
+      cam.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
       // slight view shake rotation
       this.tmpQ.setFromEuler(new THREE.Euler(this.shakeVec.x * 0.012, this.shakeVec.y * 0.012, this.shakeVec.z * 0.008));
       cam.quaternion.multiply(this.tmpQ);

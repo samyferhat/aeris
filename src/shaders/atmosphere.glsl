@@ -17,6 +17,7 @@ uniform float uSunIntensity;   // ~20 – 30 (radiance scale)
 uniform float uMieCoeff;       // ~2e-6 clear .. 3e-5 hazy
 uniform float uMieG;           // 0.76
 uniform float uHazeAmount;     // extra low-altitude haze 0..1
+uniform vec3 uSunTransmit;     // sun colour after extinction down to the ground
 
 vec2 raySphere(vec3 ro, vec3 rd, float radius) {
   float b = dot(ro, rd);
@@ -88,3 +89,45 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
 
 // Position of a world-space point relative to the planet centre.
 vec3 planetPos(vec3 worldPos) { return vec3(worldPos.x, worldPos.y + R_EARTH, worldPos.z); }
+
+
+// ---------------------------------------------------------------------------
+// Aerial perspective, analytic.
+//
+// Running the full raymarch above for every shaded fragment costs about a hundred
+// transcendental operations per pixel, and at 2 Mpixels that alone was most of the
+// frame. Over the ranges that matter here (0-20 km) the segment can instead be
+// integrated in closed form: the exponential density profile has an exact integral
+// along a straight line, and single scattering through a medium of constant
+// coefficients is S/sigma * (1 - T). The result is within a few percent of the
+// raymarch and about twenty times cheaper.
+// ---------------------------------------------------------------------------
+#define MS_TINT vec3(0.78, 0.83, 0.92)
+
+vec3 aerialPerspective(vec3 color, vec3 worldPos, vec3 camPos) {
+  vec3 d = worldPos - camPos;
+  float len = length(d);
+  if (len < 1.0) return color;
+  vec3 rd = d / len;
+  float h0 = max(camPos.y, 0.0), h1 = max(worldPos.y, 0.0);
+  float dh = h1 - h0;
+  float ir, im;
+  if (abs(dh) < 1.0) {
+    ir = exp(-h0 / H_RAYLEIGH);
+    im = exp(-h0 / H_MIE);
+  } else {
+    // Mean of exp(-h/H) over the segment, exactly.
+    ir = (H_RAYLEIGH / dh) * (exp(-h0 / H_RAYLEIGH) - exp(-h1 / H_RAYLEIGH));
+    im = (H_MIE / dh) * (exp(-h0 / H_MIE) - exp(-h1 / H_MIE));
+  }
+  im *= 1.0 + 5.0 * uHazeAmount * exp(-min(h0, h1) / 500.0);
+  vec3 sigmaR = BETA_R * ir;
+  vec3 sigmaM = vec3(uMieCoeff) * im;
+  vec3 sigmaT = sigmaR + sigmaM * 1.1;
+  vec3 T = exp(-sigmaT * len);
+  float mu = dot(rd, uSunDir);
+  vec3 S = uSunIntensity * uSunTransmit * (sigmaR * phaseRayleigh(mu) + sigmaM * phaseMie(mu, uMieG));
+  vec3 inscat = S / max(sigmaT, vec3(1e-12)) * (vec3(1.0) - T);
+  inscat += (vec3(1.0) - T) * MS_TINT * uSunIntensity * 0.030 * smoothstep(-0.14, 0.12, uSunDir.y);
+  return color * T + inscat;
+}

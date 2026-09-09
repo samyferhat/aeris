@@ -8,6 +8,8 @@ import { makeCloudShapeTexture, makeCloudDetailTexture, makeWeatherTexture } fro
 import cloudsFrag from '../shaders/clouds.frag.glsl?raw';
 import { fsVert, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag } from '../shaders/post.glsl';
 
+const _v2 = new THREE.Vector2();
+
 /**
  * Custom HDR pipeline sharing one depth texture:
  *   scene ─► clouds (½ res raymarch) ─► god rays (¼ res) ─► AO (½ res)
@@ -72,7 +74,9 @@ export class Pipeline {
     };
     this.sceneRT = hdr(size.x, size.y, true);
     this.pingRT = hdr(size.x, size.y); this.pongRT = hdr(size.x, size.y);
-    this.cloudRT = hdr(size.x >> 1, size.y >> 1);
+    // Clouds are low frequency and are upsampled with a depth-aware filter, so a quarter
+    // of the linear resolution is indistinguishable and four times cheaper.
+    this.cloudRT = hdr(size.x >> 2, size.y >> 2);
     this.aoRT = new THREE.WebGLRenderTarget(size.x >> 1, size.y >> 1, { type: THREE.UnsignedByteType, depthBuffer: false });
     this.aoRT2 = this.aoRT.clone();
     this.godRT = new THREE.WebGLRenderTarget(size.x >> 2, size.y >> 2, { type: THREE.HalfFloatType, depthBuffer: false });
@@ -87,7 +91,7 @@ export class Pipeline {
       uNear: { value: camera.near }, uFar: { value: camera.far }, uTime: { value: 0 }, uCoverage: { value: this.cloudCoverage },
       uCloudBase: { value: this.cloudBase }, uCloudTop: { value: this.cloudTop },
       uDensityBias: { value: 0.82 }, uDensitySlope: { value: 0.75 }, uDensityScale: { value: 1.0 }, uAmbientTop: { value: this.ambientTop }, uAmbientBottom: { value: this.ambientBottom },
-      uSunColor: { value: this.sunColor }, uWind: { value: new THREE.Vector2(1, 0.3) }, uResolution: { value: new THREE.Vector2(size.x >> 1, size.y >> 1) }, uFrame: { value: 0 },
+      uSunColor: { value: this.sunColor }, uWind: { value: new THREE.Vector2(1, 0.3) }, uResolution: { value: new THREE.Vector2(size.x >> 2, size.y >> 2) }, uFrame: { value: 0 },
     });
     // No glslVersion override: three.js already compiles every shader as `#version 300 es`
     // with GLSL1 compatibility defines, so `sampler3D` / `texture()` work as-is.
@@ -98,31 +102,40 @@ export class Pipeline {
     this.godBlurMat = mk(godBlurFrag, { tMask: { value: null }, uSunScreen: { value: this.sunScreen }, uDensity: { value: 0.9 }, uDecay: { value: 0.93 } });
     this.compositeMat = mk(compositeFrag, {
       tScene: { value: this.sceneRT.texture }, tClouds: { value: this.cloudRT.texture }, tDepth: { value: this.depth }, tGod: { value: this.godRT.texture }, tAO: { value: this.aoRT.texture },
-      uHalfTexel: { value: new THREE.Vector2(1 / (size.x >> 1), 1 / (size.y >> 1)) }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 }, uSunColor: { value: this.sunColor },
+      uCloudTexel: { value: new THREE.Vector2(1 / (size.x >> 2), 1 / (size.y >> 2)) }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 }, uSunColor: { value: this.sunColor },
       uGodStrength: { value: 0.6 }, uAOStrength: { value: 0.5 }, uFlareStrength: { value: 0.5 }, uAspect: { value: size.x / size.y }, uNear: { value: camera.near }, uFar: { value: camera.far },
     });
     this.motionMat = mk(motionBlurFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uInvViewProj: { value: new THREE.Matrix4() }, uPrevViewProj: { value: new THREE.Matrix4() }, uStrength: { value: 0.35 }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uNear: { value: camera.near }, uFar: { value: camera.far } });
     this.dofMat = mk(dofFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uFocus: { value: 30 }, uMaxCoc: { value: 7 }, uNear: { value: camera.near }, uFar: { value: camera.far } });
     this.grainMat = mk(grainFrag, { tDiffuse: { value: null }, uTime: { value: 0 }, uAmount: { value: 0.045 }, uVignette: { value: 0.3 } });
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.22, 0.55, 1.15);
+    // Bloom runs at half resolution: it is a wide blur, so nothing is lost and the
+    // five-level mip chain costs a quarter as much.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x >> 1, size.y >> 1), 0.22, 0.55, 1.15);
     this.output.setSize(size.x, size.y);
     this.fxaa.setSize(size.x, size.y);
   }
 
-  setSize(w: number, h: number) {
-    this.renderer.getDrawingBufferSize(new THREE.Vector2()); // ensure DPR applied by caller
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    w = size.x; h = size.y; this.w = w; this.h = h;
+  setSize(_w: number, _h: number) {
+    const size = this.renderer.getDrawingBufferSize(_v2);
+    this.resizeBuffers(Math.round(size.x * this.appliedScale), Math.round(size.y * this.appliedScale));
+  }
+
+  private resizeBuffers(w: number, h: number) {
+    this.w = w; this.h = h;
+    // The render target's own setSize does not touch an externally supplied depth
+    // texture, so resize and drop it by hand or the depth attachment keeps its old size.
+    this.depth.image.width = w; this.depth.image.height = h;
+    this.depth.dispose();
     this.sceneRT.setSize(w, h); this.pingRT.setSize(w, h); this.pongRT.setSize(w, h); this.ldrRT.setSize(w, h); this.ldrRT2.setSize(w, h);
-    this.cloudRT.setSize(w >> 1, h >> 1); this.aoRT.setSize(w >> 1, h >> 1); this.aoRT2.setSize(w >> 1, h >> 1);
+    this.cloudRT.setSize(w >> 2, h >> 2); this.aoRT.setSize(w >> 1, h >> 1); this.aoRT2.setSize(w >> 1, h >> 1);
     this.godRT.setSize(w >> 2, h >> 2); this.godRT2.setSize(w >> 2, h >> 2);
-    this.cloudMat.uniforms.uResolution.value.set(w >> 1, h >> 1);
+    this.cloudMat.uniforms.uResolution.value.set(w >> 2, h >> 2);
     this.aoMat.uniforms.uTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
-    this.compositeMat.uniforms.uHalfTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
+    this.compositeMat.uniforms.uCloudTexel.value.set(1 / (w >> 2), 1 / (h >> 2));
     this.compositeMat.uniforms.uAspect.value = w / h;
     this.motionMat.uniforms.uTexel.value.set(1 / w, 1 / h);
     this.dofMat.uniforms.uTexel.value.set(1 / w, 1 / h);
-    this.bloom.setSize(w, h); this.output.setSize(w, h); this.fxaa.setSize(w, h);
+    this.bloom.setSize(w >> 1, h >> 1); this.output.setSize(w, h); this.fxaa.setSize(w, h);
   }
 
   private blit(mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
@@ -143,7 +156,47 @@ export class Pipeline {
     this.sunVisible += (target - this.sunVisible) * 0.2;
   }
 
+  /**
+   * Adaptive resolution. The heavy passes (cloud raymarch, AO, composite) scale with
+   * pixels, so when a frame runs long the internal buffers shrink rather than the frame
+   * rate dropping. The UI and the HUD are unaffected because they are DOM, and the final
+   * blit stretches the last LDR buffer back to the canvas.
+   */
+  private frameTimes: number[] = [];
+  private lastFrameStamp = 0;
+  scaleTarget = 1;
+  private appliedScale = 1;
+  adaptive = true;
+
+  private adapt(now: number) {
+    if (this.lastFrameStamp > 0) {
+      const ms = now - this.lastFrameStamp;
+      this.frameTimes.push(ms);
+      if (this.frameTimes.length > 45) this.frameTimes.shift();
+    }
+    this.lastFrameStamp = now;
+    if (!this.adaptive || this.frameTimes.length < 45) return;
+    const sorted = [...this.frameTimes].sort((a, b) => a - b);
+    const median = sorted[sorted.length >> 1];
+    // Aim for 16.7 ms with hysteresis, so the resolution does not pump.
+    if (median > 20.5) this.scaleTarget = Math.max(0.6, this.scaleTarget - 0.06);
+    else if (median < 13.5) this.scaleTarget = Math.min(1, this.scaleTarget + 0.03);
+    if (Math.abs(this.scaleTarget - this.appliedScale) > 0.02) {
+      this.appliedScale = this.scaleTarget;
+      this.applyScale();
+      this.frameTimes.length = 0;
+    }
+  }
+
+  private applyScale() {
+    const size = this.renderer.getDrawingBufferSize(_v2);
+    const w = Math.max(320, Math.round(size.x * this.appliedScale));
+    const h = Math.max(240, Math.round(size.y * this.appliedScale));
+    this.resizeBuffers(w, h);
+  }
+
   render(dt: number, mode: 'chase' | 'cockpit' | 'orbit') {
+    this.adapt(performance.now());
     const r = this.renderer, cam = this.camera;
     this.frame++; this.time += dt;
     this.updateSun();
@@ -199,7 +252,8 @@ export class Pipeline {
     this.output.render(r, this.ldrRT, hdrOut, dt, false);
     // 10. FXAA
     this.fxaa.render(r, this.ldrRT2, this.ldrRT, dt, false);
-    // 11. grain to screen
+    // 11. grain + vignette, straight to the canvas (also the upscale when the adaptive
+    // resolution has the internal buffers smaller than the drawing buffer)
     this.grainMat.uniforms.tDiffuse.value = this.ldrRT2.texture; this.grainMat.uniforms.uTime.value = this.time;
     if (this.debugView) {
       const map = { clouds: [this.cloudRT.texture, 1], ao: [this.aoRT2.texture, 0], god: [this.godRT.texture, 0], depth: [this.depth, 3] } as const;

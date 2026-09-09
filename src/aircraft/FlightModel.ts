@@ -50,8 +50,8 @@ export class FlightModel {
   // Aircraft constants
   mass = 1050; S = 16.2; b = 11.0; c = 1.5; AR = 7.5;
   inertia = new THREE.Vector3(1800, 2500, 1300);
-  maxPower = 130000;      // W (arcade-boosted)
-  maxThrust = 3100;       // N static
+  maxPower = 120000;      // W at the propeller (slightly generous for a 172)
+  maxThrust = 2600;       // N, static thrust limit
 
   // Runtime
   flaps = 0;              // 0..1 actual (moves slowly toward target)
@@ -161,19 +161,45 @@ export class FlightModel {
 
     // --- moments (aero frame: L roll-right, M pitch-up, N yaw-right) ---------
     const nd = 1 / (2 * Vsafe);
-    // Pitch: stable in alpha (-Cm_alpha), damped in q, commanded by the elevator.
-    const Cm = 0.035 - 1.05 * alpha - 0.08 * this.flaps + 0.95 * this.elevator - 14 * qq * this.c * nd;
+    // Progressive alpha protection. Left alone, a stick this direct simply commands an
+    // angle of attack, and full back stick trims the wing well past the stall — the
+    // aircraft mushes along at 28 degrees nose-up and never flies. Bleeding off nose-up
+    // authority as the stall is approached is what makes the aeroplane forgiving; it
+    // never reaches zero, so a deliberate stall is still available to anyone who insists.
+    const alphaProtection = 1 - 0.88 * smoothstep(aStall - 0.13, aStall + 0.01, alpha);
+    const elevatorEff = this.elevator > 0 ? this.elevator * alphaProtection : this.elevator;
+    // Pitch: statically stable in alpha, well damped in q, commanded by the elevator.
+    const Cm = 0.035 - 1.25 * alpha - 0.08 * this.flaps + 0.55 * elevatorEff - 26 * qq * this.c * nd;
     // Roll: aileron authority, roll damping, dihedral effect (rolls out of a slip).
-    const Cl = 0.135 * this.aileron - 0.48 * p * this.b * nd - 0.085 * beta + 0.015 * this.rudder;
+    // Cl_da / Cl_p sets the steady roll rate: 0.075 / 0.55 gives about 65 deg/s at
+    // cruise, which is what a 172 actually does — the first cut rolled at 130.
+    const Cl = 0.075 * this.aileron - 0.55 * p * this.b * nd - 0.085 * beta + 0.015 * this.rudder;
     // Yaw: rudder, yaw damping, weathercock stability, adverse yaw from the ailerons,
     // and the slipstream/P-factor pull to the left at high power and low speed.
-    const Cn = 0.075 * this.rudder - 0.14 * r * this.b * nd + 0.10 * beta - 0.022 * this.aileron
+    const Cn = 0.070 * this.rudder - 0.16 * r * this.b * nd + 0.11 * beta - 0.016 * this.aileron
       - 0.012 * this.throttle * (1 - smoothstep(0, 45, V));
     let Ml = qbar * this.S * this.b * Cl;
     let Mm = qbar * this.S * this.c * Cm;
     let Mn = qbar * this.S * this.b * Cn;
+
+    // Hands-off stabilisation. A real light aircraft is statically stable but takes tens
+    // of seconds to settle, and its phugoid wanders; on a keyboard that reads as an
+    // aeroplane that will not hold what you set. These terms level the wings and steady
+    // the attitude only while the corresponding axis is near neutral, so they never
+    // fight an input and never limit what the aircraft can be made to do.
+    if (V > 12) {
+      const airborne = this.state.onGround ? 0.25 : 1;
+      const bankAngle = Math.asin(clamp(-this.right.y, -1, 1));
+      const pitchAngle = Math.asin(clamp(this.forward.y, -1, 1));
+      const relaxRoll = Math.max(0, 1 - Math.abs(this.aileron) * 6) * airborne;
+      const relaxPitch = Math.max(0, 1 - Math.abs(this.elevator) * 6) * airborne;
+      const authority = Math.min(1, qbar / 600);
+      Ml += (-bankAngle * 1500 - p * 2600) * relaxRoll * authority;
+      Mm += (-pitchAngle * 1400 - qq * 3400) * relaxPitch * authority;
+      Mn += (-r * 1500) * authority * airborne;
+    }
     // Keep a little elevator authority while taxiing so the nose can be raised.
-    Mm += 600 * this.elevator * (1 - smoothstep(0, 25, V)) * (V / 25);
+    Mm += 420 * elevatorEff * (1 - smoothstep(0, 25, V)) * (V / 25);
 
     // --- back to model frame -------------------------------------------------
     const F = _v2.set(-Fy, -Fz, Fx);
@@ -220,11 +246,15 @@ export class FlightModel {
       M.add(_v12.crossVectors(rBody, Fw));
       if (-vNormal > 9) this.crashed = true;
     }
+    // Anything other than the wheels touching the ground is a crash. Rather than
+    // bouncing the aircraft back out (which produced 2500 fpm of phantom climb), park it
+    // on the surface and bleed the energy away.
     const cgGround = this.hf.getGround(this.position.x, this.position.z);
-    if (this.position.y < cgGround + 0.3) {
+    if (this.position.y < cgGround + 0.55) {
       this.crashed = true;
-      this.position.y = cgGround + 0.3;
-      this.velocity.multiplyScalar(0.9);
+      this.position.y = cgGround + 0.55;
+      this.velocity.multiplyScalar(Math.max(0, 1 - 5 * dt));
+      this.omega.multiplyScalar(Math.max(0, 1 - 8 * dt));
     }
 
     // --- integrate (semi-implicit Euler) -------------------------------------

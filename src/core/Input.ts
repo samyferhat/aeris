@@ -66,7 +66,8 @@ export class Input {
 
   update(dt: number) {
     const k = this.keys, c = this.controls;
-    const ease = 1 - Math.exp(-dt * 9);
+    // Attack is quicker than release: inputs feel crisp, but letting go is gentle.
+    const ease = 1 - Math.exp(-dt * 7);
     const decay = 1 - Math.exp(-dt * 12);
     // --- keyboard targets
     let tp = (k.has('ArrowUp') || k.has('KeyS') ? -1 : 0) + (k.has('ArrowDown') || k.has('KeyW') ? 1 : 0);

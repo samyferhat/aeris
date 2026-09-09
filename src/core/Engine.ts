@@ -13,7 +13,9 @@ export class Engine {
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false, depth: true, logarithmicDepthBuffer: false });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // 2x on a retina panel means four million pixels through a raymarcher; 1.5 keeps the
+    // image crisp and buys back nearly half the fill cost. Adaptive scaling handles the rest.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -27,9 +29,9 @@ export class Engine {
     // camera and its shadow is the one the eye checks, so the first cascade is kept very
     // tight (~2 cm per texel) while the last still reaches the far ridges.
     this.csm = new CSM({
-      camera, parent: this.scene, cascades: 4, maxFar: 2400, mode: 'custom', shadowMapSize: 2048,
+      camera, parent: this.scene, cascades: 3, maxFar: 2200, mode: 'custom', shadowMapSize: 1024,
       customSplitsCallback: (cascades, near, far, target) => {
-        const t = [0.014, 0.065, 0.26, 1.0];
+        const t = [0.02, 0.11, 1.0];
         for (let i = 0; i < cascades; i++) target.push(t[i] ?? (i + 1) / cascades);
       },
       lightDirection: new THREE.Vector3(0.3, -1, 0.2).normalize(), lightIntensity: 3,

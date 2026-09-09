@@ -3,9 +3,17 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FlightModel } from './FlightModel';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
 import { applyLivery, applyCockpitMetal, applyTyre, rootInverse } from './Livery';
+import { Instruments } from './Instruments';
 import { clamp, lerp } from '../core/Noise';
 
 const deg = THREE.MathUtils.degToRad;
+const _tmpN = new THREE.Vector3();
+
+/** Materials that live inside the cabin and need extra ambient to read at all. */
+const INTERIOR_MATERIALS = new Set([
+  'Cockpit_Carpet', 'Cockpit_Trim', 'Cockpit_Plastic', 'Gauge_Faces',
+  'Cockpit_Metal_Worn', 'Leather_Seat',
+]);
 
 /**
  * Visual aircraft: loads the Blender-authored GLB, wires the named parts, and animates
@@ -24,6 +32,7 @@ export class Aircraft extends THREE.Group {
   private wheelSpin = [0, 0, 0];
   materials: THREE.Material[] = [];
   glass: THREE.Mesh | null = null;
+  instruments: Instruments | null = null;
 
   static async load(url: string, onProgress?: (p: number) => void): Promise<Aircraft> {
     const gltf = await new GLTFLoader().loadAsync(url, (e) => onProgress?.(e.total ? e.loaded / e.total : 0.5));
@@ -49,7 +58,7 @@ export class Aircraft extends THREE.Group {
         if (!replacement) {
           const std = m as THREE.MeshStandardMaterial;
           if (std.map) std.map.anisotropy = 8;
-          std.envMapIntensity = 1.0;
+          std.envMapIntensity = INTERIOR_MATERIALS.has(m.name) ? 2.2 : 1.0;
           if (m.name === 'Paint_Body') {
             replacement = applyLivery(std);
           } else if (m.name === 'Glass') {
@@ -61,6 +70,16 @@ export class Aircraft extends THREE.Group {
             applyCockpitMetal(std); replacement = std;
           } else if (m.name === 'Rubber_Tire') {
             applyTyre(std); replacement = std;
+          } else if (m.name === 'Gauge_Faces') {
+            // Swap the still atlas for a canvas that is redrawn from the flight state.
+            this.instruments = new Instruments(1024);
+            std.map = this.instruments.texture;
+            // Instruments are internally lit; without emissive they vanish in the shade.
+            std.emissive = new THREE.Color(0xffffff);
+            std.emissiveMap = this.instruments.texture;
+            std.emissiveIntensity = 0.55;
+            std.roughness = 0.30; std.metalness = 0;
+            replacement = std;
           } else {
             replacement = std;
           }
@@ -71,12 +90,21 @@ export class Aircraft extends THREE.Group {
         out.push(replacement);
       }
       mesh.material = Array.isArray(mesh.material) ? out : out[0];
+      // The instrument dials are modelled a centimetre inside their bezels, so the
+      // panel's own recess bottoms hide them. Float them just proud of the surface.
+      if (out.some((m) => m.name === 'Gauge_Faces')) {
+        const n = mesh.geometry.getAttribute('normal');
+        const mean = new THREE.Vector3();
+        for (let i = 0; i < n.count; i++) mean.add(_tmpN.fromBufferAttribute(n, i));
+        mesh.position.addScaledVector(mean.normalize(), 0.025);
+      }
     });
     for (const n of ['Aileron_L', 'Aileron_R', 'Elevator', 'Rudder', 'Flap_L', 'Flap_R', 'Gear_Nose', 'Gear_L', 'Gear_R', 'Yoke_L', 'Propeller', 'Wheel_Nose', 'Wheel_L', 'Wheel_R'])
       if (this.parts[n]) this.rest[n] = { pos: this.parts[n].position.clone(), quat: this.parts[n].quaternion.clone() };
     for (const n of ['Camera_Pilot', 'Exhaust', 'Wingtip_L', 'Wingtip_R', 'Contact_Nose', 'Contact_L', 'Contact_R', 'Nav_L', 'Nav_R', 'Beacon', 'Strobe_Tail'])
       if (this.parts[n]) { this.updateMatrixWorld(true); this.locators[n] = this.parts[n].getWorldPosition(new THREE.Vector3()).sub(this.getWorldPosition(new THREE.Vector3())); }
     this.setupLights();
+    this.setupCabinLight();
   }
 
   private setupGlass(m: THREE.MeshStandardMaterial, mesh: THREE.Mesh) {
@@ -124,6 +152,22 @@ export class Aircraft extends THREE.Group {
     this.propDiscMaterial = mat;
   }
 
+  /**
+   * Soft fill inside the cabin. Without global illumination a closed cockpit renders
+   * almost black, because the only light that should reach it — sky bouncing off the
+   * panel and the seats — is exactly what a direct + IBL model cannot deliver through
+   * a small opening. A short-range point light stands in for that bounce; its range
+   * keeps it from leaking onto the airframe outside.
+   */
+  private setupCabinLight() {
+    const light = new THREE.PointLight(0xbcd0e6, 0, 3.2, 2.0);
+    light.position.set(0, 0.55, -0.15);
+    light.castShadow = false;
+    this.add(light);
+    this.cabinLight = light;
+  }
+  cabinLight: THREE.PointLight | null = null;
+
   private setupLights() {
     const mk = (name: string, color: number, intensity: number, size: number) => {
       const p = this.parts[name]; if (!p) return null;
@@ -154,6 +198,7 @@ export class Aircraft extends THREE.Group {
 
   update(dt: number, fm: FlightModel, night: number) {
     this.t += dt;
+    this.instruments?.update(fm.state, dt, performance.now());
     this.position.copy(fm.position);
     this.quaternion.copy(fm.quaternion);
     // The livery is evaluated in aircraft space, so the shaders need world -> root.
@@ -205,6 +250,8 @@ export class Aircraft extends THREE.Group {
       // (rotation about +Z turns the wheel the same way the pilot's hands do)
       yoke.position.copy(yr.pos).add(new THREE.Vector3(0, 0, -fm.elevator * 0.06));
     }
+    // Cabin fill tracks the sky so the interior darkens at dusk like everything else.
+    if (this.cabinLight) this.cabinLight.intensity = 2.6 * (1 - night * 0.85) + 0.25;
     // Lights: nav always on at dusk/night, beacon rotating, strobe double-flash
     const nightOn = night > 0.05 ? 1 : 0.15;
     const beacon = 0.5 + 0.5 * Math.sin(this.t * 6.0) > 0.7 ? 1 : 0.05;

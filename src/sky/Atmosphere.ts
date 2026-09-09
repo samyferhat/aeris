@@ -14,6 +14,7 @@ export const atmoUniforms = {
   uMieCoeff: { value: 6e-6 },
   uMieG: { value: 0.76 },
   uHazeAmount: { value: 0.25 },
+  uSunTransmit: { value: new THREE.Color(1, 1, 1) },
 };
 
 /**
@@ -88,6 +89,7 @@ export class Atmosphere {
     const c = betaR.map((b) => Math.exp(-(b * 8000 + mie * 1200) * am));
     const vis = smoothstep(-0.02, 0.03, el);
     this.sunColor.setRGB(c[0] * vis, c[1] * vis, c[2] * vis);
+    atmoUniforms.uSunTransmit.value.copy(this.sunColor);
   }
 
   /**

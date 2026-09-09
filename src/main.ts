@@ -15,7 +15,10 @@ import { CameraRig } from './aircraft/Cameras';
 import { HUD } from './ui/HUD';
 import { TimeSlider } from './ui/TimeSlider';
 import { Pipeline } from './fx/Pipeline';
+import { Particles } from './fx/Particles';
+import { Audio } from './audio/Audio';
 
+const _size = new THREE.Vector2();
 const smoothstepJS = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const loadingFill = document.querySelector('#loading .fill') as HTMLElement;
 const loadingMsg = document.querySelector('#loading .msg') as HTMLElement;
@@ -75,6 +78,11 @@ async function boot() {
   }
   fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2);
 
+  const particles = new Particles();
+  scene.add(particles);
+  const audio = new Audio();
+  audio.attach(canvas);
+
   progress(0.9, 'Post-traitement');
   const post = new Pipeline(renderer, scene, camera);
   const hud = new HUD();
@@ -100,6 +108,7 @@ async function boot() {
       case 'timeUp': timeSlider.set(timeSlider.value + 0.5); break;
       case 'timeDown': timeSlider.set(timeSlider.value - 0.5); break;
       case 'hud': hud.toggle(); break;
+      case 'mute': audio.toggleMute(); break;
     }
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
@@ -119,7 +128,7 @@ async function boot() {
   if (params.has('orbit')) { const [t, p, d] = params.get('orbit')!.split(',').map(Number); rig.orbit.theta = t; rig.orbit.phi = p; rig.orbit.dist = d; }
   if (params.has('speed')) { fm.syncBasis(); fm.velocity.copy(fm.forward).multiplyScalar(Number(params.get('speed'))); }
   document.getElementById('overlay')!.classList.add('gone');
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio };
 
   let last = performance.now();
   let turbulence = 0;
@@ -138,7 +147,16 @@ async function boot() {
         fm.omega.z += (Math.random() - 0.5) * 0.03 * turbulence;
       }
     }
-    if (fm.touchdownEvent > 0) { rig.addShake(Math.min(1, fm.touchdownEvent * 0.35)); fm.touchdownEvent = 0; }
+    if (fm.touchdownEvent > 0) {
+      const strength = Math.min(1, fm.touchdownEvent * 0.35);
+      rig.addShake(strength);
+      audio.thump(strength);
+      if (aircraft) {
+        if (fm.touchdownEvent > 1.2) audio.chirp(strength);
+        particles.touchdownSmoke(strength, aircraft.locators, fm.position, fm.quaternion, fm.velocity);
+      }
+      fm.touchdownEvent = 0;
+    }
     aircraft?.update(dt, fm, atmosphere.night);
     rig.update(dt, fm, input.consumeOrbit(), turbulence);
     atmosphere.update(camera);
@@ -150,6 +168,12 @@ async function boot() {
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
     engine.csm.update();
+    if (aircraft) {
+      particles.setLight(atmosphere.sunDir, atmosphere.sunColor);
+      particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators,
+        renderer.getDrawingBufferSize(_size).y * 0.5, atmosphere.night);
+    }
+    audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
     post.render(dt, rig.mode);
   };

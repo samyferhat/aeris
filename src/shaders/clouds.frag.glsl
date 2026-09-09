@@ -26,8 +26,8 @@ uniform vec2 uResolution;
 uniform float uFrame;
 varying vec2 vUv;
 
-#define STEPS 56
-#define LIGHT_STEPS 5
+#define STEPS 40
+#define LIGHT_STEPS 4
 
 float linearDepth(float z) {
   float ndc = z * 2.0 - 1.0;
@@ -120,7 +120,7 @@ void main() {
   float T = 1.0;
   vec3 sunL = uSunColor * uSunIntensity * 0.85;
   for (int i = 0; i < STEPS; i++) {
-    if (i >= steps || T < 0.015 || t > t1) break;
+    if (i >= steps || T < 0.03 || t > t1) break;
     vec3 p = ro + rd * t;
     float hf = heightFrac(p);
     float d = densityAt(p, hf, true);
@@ -137,11 +137,11 @@ void main() {
     }
     t += stepLen * (d > 0.001 ? 1.0 : 1.6);
   }
-  // Aerial perspective on the cloud itself (distance haze)
+  // Aerial perspective on the cloud itself, so distant cloud banks wash out.
   if (T < 0.999) {
-    vec3 apT;
-    vec3 apIn = scatter(planetPos(ro), rd, t0 + segLen * 0.3, uSunDir, 4, 2, apT);
-    scattered = scattered * apT + apIn * (1.0 - T);
+    vec3 mid = ro + rd * (t0 + segLen * 0.35);
+    vec3 washed = aerialPerspective(scattered, mid, ro);
+    scattered = mix(scattered, washed, 1.0 - T);
   }
   gl_FragColor = vec4(scattered, T);
 }

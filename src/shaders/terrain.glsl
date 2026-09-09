@@ -110,15 +110,15 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   albedo = vec3(0.0); rough = 0.0;
   vec3 planarN = vec3(0.0, 0.0, 1.0) * 0.0;  // accumulated tangent-space perturbation
   vec3 cliffN = N;
-  if (wGrass > 0.004) { Layer l = samplePlanar(tGrassD, tGrassN, P.xz, 23.0, shade, mixNoise);
+  if (wGrass > 0.02) { Layer l = samplePlanar(tGrassD, tGrassN, P.xz, 23.0, shade, mixNoise);
     albedo += l.albedo * wGrass; rough += l.rough * wGrass; planarN += l.normal * wGrass; }
-  if (wForest > 0.004) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 17.0, shade, mixNoise);
+  if (wForest > 0.02) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 17.0, shade, mixNoise);
     albedo += l.albedo * wForest; rough += l.rough * wForest; planarN += l.normal * wForest; }
-  if (wSand > 0.004) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 13.0, shade * 1.1, mixNoise);
+  if (wSand > 0.02) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 13.0, shade * 1.1, mixNoise);
     albedo += l.albedo * wSand; rough += l.rough * wSand; planarN += l.normal * wSand; }
-  if (wScree > 0.004) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 25.0, shade, mixNoise);
+  if (wScree > 0.02) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 25.0, shade, mixNoise);
     albedo += l.albedo * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
-  if (wCliff > 0.004) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 27.0, shade, mixNoise);
+  if (wCliff > 0.02) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 27.0, shade, mixNoise);
     albedo += l.albedo * wCliff; rough += l.rough * wCliff; cliffN = l.normal; }
 
   // Normal detail fades out with distance so far hills do not shimmer.

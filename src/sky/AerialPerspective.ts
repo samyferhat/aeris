@@ -12,15 +12,7 @@ const parsChunk = /* glsl */ `
 varying vec3 vAPWorldPos;
 `;
 const fragChunk = /* glsl */ `
-{
-  vec3 apRo = planetPos(cameraPosition);
-  vec3 apDelta = vAPWorldPos - cameraPosition;
-  float apLen = length(apDelta);
-  vec3 apRd = apDelta / max(apLen, 1e-3);
-  vec3 apT;
-  vec3 apIn = scatter(apRo, apRd, apLen, uSunDir, 6, 3, apT);
-  gl_FragColor.rgb = gl_FragColor.rgb * apT + apIn;
-}
+gl_FragColor.rgb = aerialPerspective(gl_FragColor.rgb, vAPWorldPos, cameraPosition);
 `;
 const vertPars = /* glsl */ `varying vec3 vAPWorldPos;`;
 const vertMain = /* glsl */ `vAPWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
