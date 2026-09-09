@@ -168,19 +168,24 @@ export class Aircraft extends THREE.Group {
   }
   cabinLight: THREE.PointLight | null = null;
 
+  /**
+   * Position lights. These exist to be seen, not to illuminate: on a real aircraft the
+   * beacon barely tints the wing root. Keeping the point lights weak and short-range is
+   * what stops the night view turning into a red flood.
+   */
   private setupLights() {
     const mk = (name: string, color: number, intensity: number, size: number) => {
       const p = this.parts[name]; if (!p) return null;
-      const light = new THREE.PointLight(color, 0, 40, 2); light.intensity = intensity; p.add(light);
+      const light = new THREE.PointLight(color, 0, 7, 2); light.intensity = intensity; p.add(light);
       const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: Aircraft.glowTexture(), color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
       spr.scale.setScalar(size); p.add(spr); this.lights.sprites.push(spr);
       (spr as any)._base = intensity;
       return light;
     };
-    const l = mk('Nav_L', 0xff2a1a, 6, 0.5), r = mk('Nav_R', 0x25ff5a, 6, 0.5);
+    const l = mk('Nav_L', 0xff2a1a, 0.5, 0.30), r = mk('Nav_R', 0x25ff5a, 0.5, 0.30);
     if (l) this.lights.nav.push(l); if (r) this.lights.nav.push(r);
-    this.lights.beacon = mk('Beacon', 0xff2020, 18, 0.9);
-    this.lights.strobe = mk('Strobe_Tail', 0xffffff, 30, 1.1);
+    this.lights.beacon = mk('Beacon', 0xff2020, 1.6, 0.42);
+    this.lights.strobe = mk('Strobe_Tail', 0xffffff, 4.0, 0.55);
   }
 
   static glowTexture(): THREE.Texture {
@@ -257,14 +262,14 @@ export class Aircraft extends THREE.Group {
     const beacon = 0.5 + 0.5 * Math.sin(this.t * 6.0) > 0.7 ? 1 : 0.05;
     const strobePhase = (this.t % 1.6);
     const strobe = (strobePhase < 0.05 || (strobePhase > 0.12 && strobePhase < 0.17)) ? 1 : 0;
-    this.lights.nav.forEach((l) => (l.intensity = 6 * nightOn));
-    if (this.lights.beacon) this.lights.beacon.intensity = 18 * beacon * (0.3 + 0.7 * night);
-    if (this.lights.strobe) this.lights.strobe.intensity = 30 * strobe;
+    this.lights.nav.forEach((l) => (l.intensity = 0.5 * nightOn));
+    if (this.lights.beacon) this.lights.beacon.intensity = 1.6 * beacon * (0.3 + 0.7 * night);
+    if (this.lights.strobe) this.lights.strobe.intensity = 4.0 * strobe;
     for (const s of this.lights.sprites) {
       const p = s.parent!.name;
       const f = p === 'Beacon' ? beacon : p === 'Strobe_Tail' ? strobe : 1;
-      s.material.opacity = clamp(f * (0.35 + 0.65 * night), 0.08, 1);
-      s.scale.setScalar((p === 'Strobe_Tail' ? 1.6 : p === 'Beacon' ? 1.0 : 0.6) * (0.5 + 0.5 * night) * (0.6 + 0.4 * f));
+      s.material.opacity = clamp(f * (0.30 + 0.70 * night), 0.05, 1);
+      s.scale.setScalar((p === 'Strobe_Tail' ? 0.9 : p === 'Beacon' ? 0.55 : 0.34) * (0.45 + 0.55 * night) * (0.6 + 0.4 * f));
     }
   }
 }

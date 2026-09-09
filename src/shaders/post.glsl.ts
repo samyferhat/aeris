@@ -185,3 +185,71 @@ void main(){
   vec2 d = vUv - 0.5; float v = 1.0 - dot(d, d) * uVignette * 2.2;
   c.rgb *= smoothstep(0.0, 1.0, v);
   gl_FragColor = c; }`;
+
+
+/** Log-luminance downsample: first step of the auto-exposure chain. */
+export const lumFrag = /* glsl */ `
+precision highp float;
+uniform sampler2D tDiffuse; uniform vec2 uTexel; varying vec2 vUv;
+void main(){
+  vec3 c = texture2D(tDiffuse, vUv).rgb
+         + texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).rgb
+         + texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).rgb
+         + texture2D(tDiffuse, vUv + uTexel).rgb;
+  float lum = dot(c * 0.25, vec3(0.2126, 0.7152, 0.0722));
+  // Centre-weighted metering. A flight sim frame is half sky, and a bright sky metered
+  // flat drags the exposure down until the ground goes to mud — the same reason a
+  // photographer meters off the subject and lets the sky blow a little.
+  float w = mix(1.0, 0.22, smoothstep(0.48, 0.95, vUv.y));
+  w *= mix(0.55, 1.0, 1.0 - smoothstep(0.25, 0.75, abs(vUv.x - 0.5) * 2.0));
+  float L = log(clamp(lum, 1e-5, 6.0));
+  // Blend toward a neutral reference by the pixel's weight, so low-weight regions
+  // nudge rather than dominate the average.
+  gl_FragColor = vec4(mix(log(0.20), L, w), 0.0, 0.0, 1.0);
+}`;
+
+export const downsampleFrag = /* glsl */ `
+precision highp float;
+uniform sampler2D tDiffuse; uniform vec2 uTexel; uniform float uSteps; varying vec2 vUv;
+void main(){
+  float sum = 0.0; float n = 0.0;
+  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+    sum += texture2D(tDiffuse, vUv + vec2(float(i) - 1.5, float(j) - 1.5) * uTexel).r; n += 1.0;
+  }
+  gl_FragColor = vec4(sum / n, 0.0, 0.0, 1.0);
+}`;
+
+/** Temporal eye adaptation: one texel of state, lerped toward the new average. */
+export const adaptFrag = /* glsl */ `
+precision highp float;
+uniform sampler2D tCurrent; uniform sampler2D tPrevious; uniform float uRate; varying vec2 vUv;
+void main(){
+  float cur = texture2D(tCurrent, vec2(0.5)).r;
+  float prev = texture2D(tPrevious, vec2(0.5)).r;
+  // The eye darkens faster than it brightens, as ours does.
+  float rate = cur > prev ? uRate * 1.7 : uRate;
+  gl_FragColor = vec4(mix(prev, cur, clamp(rate, 0.0, 1.0)), 0.0, 0.0, 1.0);
+}`;
+
+/**
+ * Tone mapping with automatic exposure. Replaces three's OutputPass so the exposure can
+ * come from a texture (the adaptation state) instead of a uniform set on the CPU, which
+ * would need a GPU readback and a stall.
+ */
+export const toneFrag = /* glsl */ `
+precision highp float;
+uniform sampler2D tDiffuse; uniform sampler2D tLum;
+uniform float uKey; uniform float uMinExposure; uniform float uMaxExposure; uniform float uManual;
+varying vec2 vUv;
+// ACES filmic, Stephen Hill's fit.
+const mat3 ACES_IN = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+const mat3 ACES_OUT = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+vec3 rrt(vec3 v){ vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }
+vec3 aces(vec3 c){ c = ACES_IN * c; c = rrt(c); c = ACES_OUT * c; return clamp(c, 0.0, 1.0); }
+vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(max(c, 1e-5), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+void main(){
+  vec3 c = texture2D(tDiffuse, vUv).rgb;
+  float avg = exp(texture2D(tLum, vec2(0.5)).r);
+  float exposure = clamp(uKey / max(avg, 1e-4), uMinExposure, uMaxExposure) * uManual;
+  gl_FragColor = vec4(toSRGB(aces(c * exposure)), 1.0);
+}`;

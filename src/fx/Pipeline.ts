@@ -1,12 +1,11 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
 import { atmoUniforms } from '../sky/Atmosphere';
 import { makeCloudShapeTexture, makeCloudDetailTexture, makeWeatherTexture } from '../sky/CloudNoise';
 import cloudsFrag from '../shaders/clouds.frag.glsl?raw';
-import { fsVert, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag } from '../shaders/post.glsl';
+import { fsVert, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag, lumFrag, downsampleFrag, adaptFrag, toneFrag } from '../shaders/post.glsl';
 
 const _v2 = new THREE.Vector2();
 
@@ -39,7 +38,18 @@ export class Pipeline {
   private dofMat: THREE.ShaderMaterial;
   private grainMat: THREE.ShaderMaterial;
   private bloom: UnrealBloomPass;
-  private output = new OutputPass();
+  private lumRT!: THREE.WebGLRenderTarget;
+  private lumRT2!: THREE.WebGLRenderTarget;
+  private lumRT3!: THREE.WebGLRenderTarget;
+  private adaptRT: THREE.WebGLRenderTarget[] = [];
+  private adaptIndex = 0;
+  private lumMat!: THREE.ShaderMaterial;
+  private downMat!: THREE.ShaderMaterial;
+  private adaptMat!: THREE.ShaderMaterial;
+  private toneMat!: THREE.ShaderMaterial;
+  /** Middle-grey target for the auto exposure; raise for a brighter image. */
+  exposureKey = 0.44;
+  manualExposure = 1.0;
   private fxaa = new FXAAPass();
   private prevViewProj = new THREE.Matrix4();
   private frame = 0;
@@ -111,8 +121,21 @@ export class Pipeline {
     // Bloom runs at half resolution: it is a wide blur, so nothing is lost and the
     // five-level mip chain costs a quarter as much.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x >> 1, size.y >> 1), 0.22, 0.55, 1.15);
-    this.output.setSize(size.x, size.y);
     this.fxaa.setSize(size.x, size.y);
+
+    // ---- auto exposure ----------------------------------------------------
+    const lumOpts: THREE.RenderTargetOptions = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RedFormat };
+    this.lumRT = new THREE.WebGLRenderTarget(64, 64, lumOpts);
+    this.lumRT2 = new THREE.WebGLRenderTarget(16, 16, lumOpts);
+    this.lumRT3 = new THREE.WebGLRenderTarget(1, 1, lumOpts);
+    this.adaptRT = [new THREE.WebGLRenderTarget(1, 1, lumOpts), new THREE.WebGLRenderTarget(1, 1, lumOpts)];
+    this.lumMat = mk(lumFrag, { tDiffuse: { value: null }, uTexel: { value: new THREE.Vector2() } });
+    this.downMat = mk(downsampleFrag, { tDiffuse: { value: null }, uTexel: { value: new THREE.Vector2() }, uSteps: { value: 4 } });
+    this.adaptMat = mk(adaptFrag, { tCurrent: { value: null }, tPrevious: { value: null }, uRate: { value: 0.04 } });
+    this.toneMat = mk(toneFrag, {
+      tDiffuse: { value: null }, tLum: { value: this.adaptRT[0].texture },
+      uKey: { value: this.exposureKey }, uMinExposure: { value: 0.18 }, uMaxExposure: { value: 1.7 }, uManual: { value: 1 },
+    });
   }
 
   setSize(_w: number, _h: number) {
@@ -135,7 +158,7 @@ export class Pipeline {
     this.compositeMat.uniforms.uAspect.value = w / h;
     this.motionMat.uniforms.uTexel.value.set(1 / w, 1 / h);
     this.dofMat.uniforms.uTexel.value.set(1 / w, 1 / h);
-    this.bloom.setSize(w >> 1, h >> 1); this.output.setSize(w, h); this.fxaa.setSize(w, h);
+    this.bloom.setSize(w >> 1, h >> 1); this.fxaa.setSize(w, h);
   }
 
   private blit(mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
@@ -248,11 +271,33 @@ export class Pipeline {
       this.dofMat.uniforms.tDiffuse.value = this.pongRT.texture; this.dofMat.uniforms.uNear.value = cam.near; this.dofMat.uniforms.uFar.value = cam.far;
       this.blit(this.dofMat, this.pingRT); hdrOut = this.pingRT;
     }
-    // 9. tone mapping → LDR
-    this.output.render(r, this.ldrRT, hdrOut, dt, false);
-    // 10. FXAA
+    // 9. auto exposure: log-luminance down to a single texel, then a damped adaptation
+    this.lumMat.uniforms.tDiffuse.value = hdrOut.texture;
+    this.lumMat.uniforms.uTexel.value.set(1 / this.w, 1 / this.h);
+    this.blit(this.lumMat, this.lumRT);
+    this.downMat.uniforms.tDiffuse.value = this.lumRT.texture;
+    this.downMat.uniforms.uTexel.value.set(1 / 64, 1 / 64);
+    this.blit(this.downMat, this.lumRT2);
+    this.downMat.uniforms.tDiffuse.value = this.lumRT2.texture;
+    this.downMat.uniforms.uTexel.value.set(1 / 16, 1 / 16);
+    this.blit(this.downMat, this.lumRT3);
+    const prev = this.adaptRT[this.adaptIndex];
+    const next = this.adaptRT[this.adaptIndex ^ 1];
+    this.adaptMat.uniforms.tCurrent.value = this.lumRT3.texture;
+    this.adaptMat.uniforms.tPrevious.value = prev.texture;
+    this.adaptMat.uniforms.uRate.value = 1 - Math.exp(-dt * 1.6);
+    this.blit(this.adaptMat, next);
+    this.adaptIndex ^= 1;
+
+    // 10. tone mapping (ACES) + sRGB encode
+    this.toneMat.uniforms.tDiffuse.value = hdrOut.texture;
+    this.toneMat.uniforms.tLum.value = next.texture;
+    this.toneMat.uniforms.uKey.value = this.exposureKey;
+    this.toneMat.uniforms.uManual.value = this.manualExposure;
+    this.blit(this.toneMat, this.ldrRT);
+    // 11. FXAA
     this.fxaa.render(r, this.ldrRT2, this.ldrRT, dt, false);
-    // 11. grain + vignette, straight to the canvas (also the upscale when the adaptive
+    // 12. grain + vignette, straight to the canvas (also the upscale when the adaptive
     // resolution has the internal buffers smaller than the drawing buffer)
     this.grainMat.uniforms.tDiffuse.value = this.ldrRT2.texture; this.grainMat.uniforms.uTime.value = this.time;
     if (this.debugView) {
