@@ -23,12 +23,20 @@ export class Engine {
   }
 
   setupShadows(camera: THREE.Camera) {
+    // Custom splits rather than 'practical': the aircraft is always within ~30 m of the
+    // camera and its shadow is the one the eye checks, so the first cascade is kept very
+    // tight (~2 cm per texel) while the last still reaches the far ridges.
     this.csm = new CSM({
-      camera, parent: this.scene, cascades: 3, maxFar: 2600, mode: 'practical', shadowMapSize: 2048,
-      lightDirection: new THREE.Vector3(0.3, -1, 0.2).normalize(), lightIntensity: 3, shadowBias: -0.00015, lightMargin: 300,
+      camera, parent: this.scene, cascades: 4, maxFar: 2400, mode: 'custom', shadowMapSize: 2048,
+      customSplitsCallback: (cascades, near, far, target) => {
+        const t = [0.014, 0.065, 0.26, 1.0];
+        for (let i = 0; i < cascades; i++) target.push(t[i] ?? (i + 1) / cascades);
+      },
+      lightDirection: new THREE.Vector3(0.3, -1, 0.2).normalize(), lightIntensity: 3,
+      shadowBias: -0.00008, lightMargin: 400, lightFar: 3000,
     });
     this.csm.fade = true;
-    for (const l of this.csm.lights) { l.shadow.normalBias = 0.6; l.shadow.radius = 2; }
+    for (const l of this.csm.lights) { l.shadow.normalBias = 0.25; l.shadow.radius = 1.6; }
   }
 
   /**

@@ -100,7 +100,7 @@ export class Heightfield {
         this.data[k] = h;
         // Erode land above the waterline; leave the sea floor and the airfield alone.
         const dx = Math.abs(x - RUNWAY.x), dz = Math.abs(z - RUNWAY.z);
-        const nearField = 1 - smoothstep(0, 420, Math.max(dx - (RUNWAY.length / 2 + 200), dz - (RUNWAY.width / 2 + 240), 0));
+        const nearField = 1 - smoothstep(0, 260, Math.max(dx - (RUNWAY.length / 2 + 90), dz - (RUNWAY.width / 2 + 120), 0));
         this.erodeMask[k] = smoothstep(-1, 14, h) * (1 - nearField);
       }
     }
@@ -115,8 +115,8 @@ export class Heightfield {
       for (let i = 0; i < HF_RES; i++) {
         const x = -half + i * this.cell;
         const dx = Math.abs(x - RUNWAY.x), dz = Math.abs(z - RUNWAY.z);
-        const out = Math.max(dx - (RUNWAY.length / 2 + 210), dz - (RUNWAY.width / 2 + 250), 0);
-        const flat = 1 - smoothstep(0, 340, out);
+        const out = Math.max(dx - (RUNWAY.length / 2 + 95), dz - (RUNWAY.width / 2 + 125), 0);
+        const flat = 1 - smoothstep(0, 210, out);
         if (flat <= 0.001) continue;
         const k = j * HF_RES + i;
         // Perfectly level over the strip itself, gently undulating grass around it.

@@ -23,6 +23,7 @@ export class CameraRig {
   private headLag = new THREE.Vector3();
   private t = 0;
   private lookTarget = new THREE.Vector3();
+  private initialised = false;
   private tmpQ = new THREE.Quaternion();
 
   constructor(aspect: number) {
@@ -47,6 +48,8 @@ export class CameraRig {
     this.shakeVec.set(n1, n2, n3).multiplyScalar(this.shake);
 
     const pos = fm.position, q = fm.quaternion;
+    // Snap on the first frame instead of springing in from the world origin.
+    if (!this.initialised) { this.initialised = true; this.chasePos.set(0, 0, 0); this.lookTarget.copy(pos).addScaledVector(fm.forward, 20); }
     const fwd = fm.forward, up = fm.up;
     const cam = this.camera;
 

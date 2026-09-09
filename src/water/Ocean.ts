@@ -21,8 +21,8 @@ export class Ocean extends THREE.Group {
       tDetailN: { value: Ocean.makeDetailNormal() },
       tFoam: { value: Ocean.makeFoam() },
       uWaveScale: { value: 1.0 },
-      uShallowColor: { value: new THREE.Color(0x1f8f92).convertSRGBToLinear() },
-      uDeepColor: { value: new THREE.Color(0x03203a).convertSRGBToLinear() },
+      uShallowColor: { value: new THREE.Color(0x2aa8a4).convertSRGBToLinear() },
+      uDeepColor: { value: new THREE.Color(0x06304f).convertSRGBToLinear() },
       uSandColor: { value: new THREE.Color(0xb9a77a).convertSRGBToLinear() },
     };
     this.material = this.makeMaterial();
@@ -55,10 +55,14 @@ export class Ocean extends THREE.Group {
         .replace('#include <begin_vertex>', `
           vec3 wp0 = (modelMatrix * vec4(position, 1.0)).xyz;
           float camDist = length(wp0.xz - cameraPosition.xz);
+          // Bend the sea down with the curvature of the earth. Without this the flat
+          // plane reaches exactly eye level and paints a bright strip over the band of
+          // sky the atmosphere shader (which does use a round planet) expects to see.
+          wp0.y -= camDist * camDist / (2.0 * 6371000.0);
           vOFade = 1.0 - smoothstep(1500.0, 4000.0, camDist);
           vec3 oDisp, oN; float oCrest;
           gerstner(wp0, uWaveScale * vOFade, oDisp, oN, oCrest);
-          vec3 transformed = position + oDisp;
+          vec3 transformed = position + oDisp + vec3(0.0, wp0.y - (modelMatrix * vec4(position, 1.0)).y, 0.0);
           vOWaveNormal = mix(vec3(0.0, 1.0, 0.0), oN, vOFade);
           vOCrest = oCrest;
           vOWorldPos = wp0 + oDisp;`)

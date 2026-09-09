@@ -83,12 +83,21 @@ export class FlightModel {
   /** Attach wheel contact points read from the model (body-frame positions). */
   setWheels(defs: WheelDef[]) { this.wheels = defs; this.state.wheelCompression = defs.map(() => 0); this.state.wheelOnGround = defs.map(() => false); }
 
+  /** Refreshes the world-space basis vectors from the current attitude. */
+  syncBasis() {
+    this.forward.set(0, 0, 1).applyQuaternion(this.quaternion);
+    this.up.set(0, 1, 0).applyQuaternion(this.quaternion);
+    this.right.set(-1, 0, 0).applyQuaternion(this.quaternion);
+  }
+
   resetOnRunway(x: number, z: number, y: number, headingRad: number) {
     this.position.set(x, y + 0.90 + 0.04, z);
     this.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), headingRad);
     this.velocity.set(0, 0, 0); this.omega.set(0, 0, 0);
     this.throttle = 0; this.flaps = 0; this.flapsTarget = 0; this.rpm = 0; this.crashed = false;
     this.lastVel.set(0, 0, 0);
+    this.syncBasis();
+    this.updateState(1 / 60);
   }
 
   get isCrashed() { return this.crashed; }

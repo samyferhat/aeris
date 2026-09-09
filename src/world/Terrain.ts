@@ -6,9 +6,16 @@ import { SimplexNoise } from '../core/Noise';
 
 const CHUNKS = 24;                       // chunks per side
 const CHUNK = WORLD_SIZE / CHUNKS;       // 375 m
-const LOD_SEGMENTS = [64, 32, 16, 8];
-const LOD_DISTANCE = [900, 2200, 4500];  // switch distances (chunk centre)
-const SKIRT = 40;
+// Coarse far LODs visibly truncate ridge lines — a 600 m peak sampled every 47 m turns
+// into a mesa — so the distant tiers stay comparatively dense. Geometry is cheap next
+// to this project's fragment work.
+// Every level is a multiple of EDGE_BASE so that the vertices shared with a neighbour
+// can be snapped to the same coarse anchors — that removes LOD cracks exactly, with no
+// skirts. Skirts are a vertical curtain at the chunk border and on sloping ground they
+// are always in front of the neighbour's surface, which reads as vertical banding.
+const EDGE_BASE = 12;
+const LOD_SEGMENTS = [60, 48, 36, 24, 12];
+const LOD_DISTANCE = [750, 1700, 3400, 6000];
 
 /**
  * Chunked, LOD'd terrain built from the heightfield. Each chunk lazily builds a
@@ -34,7 +41,7 @@ export class Terrain extends THREE.Group {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = true;
-      const c = { mesh, cx: x0, cz: z0, lod: -1, geos: [null, null, null, null] as (THREE.BufferGeometry | null)[], center: new THREE.Vector3(x0 + CHUNK / 2, 0, z0 + CHUNK / 2) };
+      const c = { mesh, cx: x0, cz: z0, lod: -1, geos: LOD_SEGMENTS.map(() => null) as (THREE.BufferGeometry | null)[], center: new THREE.Vector3(x0 + CHUNK / 2, 0, z0 + CHUNK / 2) };
       this.chunks.push(c);
       this.add(mesh);
     }
@@ -43,27 +50,42 @@ export class Terrain extends THREE.Group {
   private buildGeometry(x0: number, z0: number, seg: number): THREE.BufferGeometry {
     const hf = this.hf;
     const n = seg + 1;
-    const nSk = n + 2; // with skirt ring
     const step = CHUNK / seg;
-    const pos = new Float32Array(nSk * nSk * 3);
-    const nor = new Float32Array(nSk * nSk * 3);
-    const uv = new Float32Array(nSk * nSk * 2);
+    const stride = seg / EDGE_BASE;          // vertices per coarse anchor span
+    const pos = new Float32Array(n * n * 3);
+    const nor = new Float32Array(n * n * 3);
+    const uv = new Float32Array(n * n * 2);
     const tmp = new THREE.Vector3();
+
+    // Height of a border vertex, evaluated on the coarse anchor grid so that two
+    // neighbouring chunks agree along their shared edge whatever their LOD.
+    const anchored = (along: number, fixedX: number, fixedZ: number, horizontal: boolean) => {
+      const a0 = Math.floor(along / stride) * stride;
+      const a1 = Math.min(a0 + stride, seg);
+      const t = a1 === a0 ? 0 : (along - a0) / (a1 - a0);
+      const h0 = horizontal ? hf.getHeight(x0 + a0 * step, fixedZ) : hf.getHeight(fixedX, z0 + a0 * step);
+      const h1 = horizontal ? hf.getHeight(x0 + a1 * step, fixedZ) : hf.getHeight(fixedX, z0 + a1 * step);
+      return h0 + (h1 - h0) * t;
+    };
+
     let p = 0, q = 0;
-    for (let j = 0; j < nSk; j++) for (let i = 0; i < nSk; i++) {
-      const gi = Math.min(Math.max(i - 1, 0), seg), gj = Math.min(Math.max(j - 1, 0), seg);
-      const x = x0 + gi * step, z = z0 + gj * step;
-      const skirt = (i === 0 || j === 0 || i === nSk - 1 || j === nSk - 1);
-      const h = hf.getHeight(x, z) - (skirt ? SKIRT : 0);
-      pos[p] = x; pos[p + 1] = h; pos[p + 2] = z;
-      hf.getNormal(x, z, tmp);
-      nor[p] = tmp.x; nor[p + 1] = tmp.y; nor[p + 2] = tmp.z;
-      p += 3;
-      uv[q++] = gi / seg; uv[q++] = gj / seg;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const x = x0 + i * step, z = z0 + j * step;
+        let h: number;
+        if (j === 0 || j === seg) h = anchored(i, x, z, true);
+        else if (i === 0 || i === seg) h = anchored(j, x, z, false);
+        else h = hf.getHeight(x, z);
+        pos[p] = x; pos[p + 1] = h; pos[p + 2] = z;
+        hf.getNormal(x, z, tmp);
+        nor[p] = tmp.x; nor[p + 1] = tmp.y; nor[p + 2] = tmp.z;
+        p += 3;
+        uv[q++] = i / seg; uv[q++] = j / seg;
+      }
     }
     const idx: number[] = [];
-    for (let j = 0; j < nSk - 1; j++) for (let i = 0; i < nSk - 1; i++) {
-      const a = j * nSk + i, b = a + 1, c = a + nSk, d = c + 1;
+    for (let j = 0; j < seg; j++) for (let i = 0; i < seg; i++) {
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }
     const g = new THREE.BufferGeometry();
@@ -83,7 +105,7 @@ export class Terrain extends THREE.Group {
       const dx = Math.max(Math.abs(cp.x - c.center.x) - CHUNK / 2, 0);
       const dz = Math.max(Math.abs(cp.z - c.center.z) - CHUNK / 2, 0);
       const d = Math.hypot(dx, dz);
-      let lod = 3;
+      let lod = LOD_SEGMENTS.length - 1;
       for (let l = 0; l < LOD_DISTANCE.length; l++) if (d < LOD_DISTANCE[l]) { lod = l; break; }
       if (lod !== c.lod) {
         if (!c.geos[lod]) c.geos[lod] = this.buildGeometry(c.cx, c.cz, LOD_SEGMENTS[lod]);
@@ -120,7 +142,7 @@ export class Terrain extends THREE.Group {
       tCliffD: { value: cliff.D }, tCliffN: { value: cliff.N },
       tSandD: { value: sand.D }, tSandN: { value: sand.N },
       tScreeD: { value: scree.D }, tScreeN: { value: scree.N },
-      tMacro: { value: macro }, uSeaLevel: { value: 0 },
+      tMacro: { value: macro }, uSeaLevel: { value: 0 }, uGroundLift: { value: 1.45 },
     };
     (mat as any)._apKey = "terrain";
     (mat as any).terrainUniforms = uniforms;

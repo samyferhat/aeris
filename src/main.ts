@@ -107,28 +107,32 @@ async function boot() {
   // Debug/reproducible views: ?pos=x,y,z&hour=h&mode=orbit|chase|cockpit&heading=deg
   const params = new URLSearchParams(location.search);
   if (params.has('pos')) { const [x, y, z] = params.get('pos')!.split(',').map(Number); fm.position.set(x, y, z); fm.velocity.set(0, 0, 0); }
-  if (params.has('heading')) fm.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -THREE.MathUtils.degToRad(Number(params.get('heading'))));
+  if (params.has('heading')) {
+    // heading 0 = north (-Z); rotating +Z about +Y by (180 - heading) lands there.
+    fm.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(180 - Number(params.get('heading'))));
+    fm.syncBasis();
+  }
   if (params.has('hour')) timeSlider.set(Number(params.get('hour')));
   if (params.has('mode')) rig.mode = params.get('mode') as any;
   if (params.has('freeze')) paused = true;
   if (params.has('debug')) post.debugView = params.get('debug') as any;
   if (params.has('orbit')) { const [t, p, d] = params.get('orbit')!.split(',').map(Number); rig.orbit.theta = t; rig.orbit.phi = p; rig.orbit.dist = d; }
-  if (params.has('speed')) fm.velocity.copy(fm.forward.clone().multiplyScalar(Number(params.get('speed'))));
+  if (params.has('speed')) { fm.syncBasis(); fm.velocity.copy(fm.forward).multiplyScalar(Number(params.get('speed'))); }
   document.getElementById('overlay')!.classList.add('gone');
   (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation };
 
   let last = performance.now();
   let turbulence = 0;
-  const loop = () => {
-    requestAnimationFrame(loop);
-    const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+
+  /** One simulation + render step. Split out of the rAF loop so tools can drive it. */
+  const tick = (dt: number) => {
     input.update(dt);
     if (!paused) {
       fm.step(dt, input.controls);
-      // Gentle random turbulence, stronger near terrain and in the afternoon thermals
+      // Gentle turbulence: stronger in the afternoon thermals and close to the ground.
       const thermals = 0.5 + 0.5 * Math.sin((atmosphere.hour - 14) / 24 * Math.PI * 2);
-      turbulence = THREE.MathUtils.lerp(turbulence, (0.15 + 0.35 * thermals) * (fm.state.onGround ? 0 : 1) * Math.max(0, 1 - fm.state.heightAGL / 900), dt);
+      const target = (0.15 + 0.35 * thermals) * (fm.state.onGround ? 0 : 1) * Math.max(0, 1 - fm.state.heightAGL / 900);
+      turbulence = THREE.MathUtils.lerp(turbulence, target, dt);
       if (!fm.state.onGround) {
         fm.omega.x += (Math.random() - 0.5) * 0.02 * turbulence;
         fm.omega.z += (Math.random() - 0.5) * 0.03 * turbulence;
@@ -139,7 +143,8 @@ async function boot() {
     rig.update(dt, fm, input.consumeOrbit(), turbulence);
     atmosphere.update(camera);
     environment.update(scene, atmosphere.sky);
-    post.ambientTop.copy(environment.skyTop); post.ambientBottom.copy(environment.skyHorizon).multiplyScalar(0.6);
+    post.ambientTop.copy(environment.skyTop);
+    post.ambientBottom.copy(environment.skyHorizon).multiplyScalar(0.6);
     post.dofEnabled = rig.mode === 'cockpit';
     terrain.update(camera);
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
@@ -148,6 +153,20 @@ async function boot() {
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
     post.render(dt, rig.mode);
   };
+
+  const loop = () => {
+    requestAnimationFrame(loop);
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    tick(dt);
+  };
+
+  (window as any).__aeris.tick = tick;
+  (window as any).__aeris.warm = (n = 90, dt = 1 / 60) => { for (let i = 0; i < n; i++) tick(dt); };
+  // Settle the streaming systems and the camera springs before the first painted frame.
+  for (let i = 0; i < 8; i++) tick(1 / 60);
+
   loop();
 }
 

@@ -18,6 +18,7 @@ uniform sampler2D tSandD, tSandN;
 uniform sampler2D tScreeD, tScreeN;
 uniform sampler2D tMacro;
 uniform float uSeaLevel;
+uniform float uGroundLift;
 varying vec3 vTWorldPos;
 varying vec3 vTWorldNormal;
 
@@ -25,34 +26,47 @@ struct Layer { vec3 albedo; vec3 normal; float rough; };
 
 vec3 unpackN(vec3 n) { return n * 2.0 - 1.0; }
 
-// Two octaves of the same texture: the fine one carries the detail, the coarse one
-// (5.7x larger and rotated) modulates its brightness and normal. Multiplying rather
-// than cross-fading is what actually hides the tiling grid — the eye locks onto the
-// low-frequency repeat, and after modulation that repeat is 5.7x further away.
-Layer samplePlanar(sampler2D D, sampler2D N, vec2 p, float scale, float blend) {
-  vec2 uv1 = p / scale;
-  vec2 uv2 = mat2(0.81, -0.59, 0.59, 0.81) * p / (scale * 5.7);
+// ---------------------------------------------------------------------------
+// De-tiling.
+//
+// A single scaled sample of a photographic texture repeats on a visible grid, and the
+// eye locks onto it within a second. Two fixes are combined here:
+//   * each layer is sampled twice, with different rotations and offsets, and the two
+//     are cross-faded by a slow non-periodic noise — the product has no period;
+//   * the base scale is large enough that a single tile spans tens of metres.
+// Cost stays at two taps per layer, the same as a plain two-octave blend.
+// ---------------------------------------------------------------------------
+const mat2 ROT_A = mat2(0.9363, -0.3511, 0.3511, 0.9363);   // ~20.6 degrees
+const mat2 ROT_B = mat2(0.1045, 0.9945, -0.9945, 0.1045);   // ~84 degrees
+
+Layer samplePlanar(sampler2D D, sampler2D N, vec2 p, float scale, float shade, float mixNoise) {
+  vec2 uvA = ROT_A * p / scale + vec2(0.31, 0.77);
+  vec2 uvB = ROT_B * p / (scale * 1.37) + vec2(0.63, 0.18);
+  float m = smoothstep(0.34, 0.66, mixNoise);
+  vec4 nA = texture2D(N, uvA), nB = texture2D(N, uvB);
   Layer l;
-  vec4 n1 = texture2D(N, uv1), n2 = texture2D(N, uv2);
-  vec3 c1 = texture2D(D, uv1).rgb, c2 = texture2D(D, uv2).rgb;
-  float lum2 = dot(c2, vec3(0.299, 0.587, 0.114));
-  l.albedo = clamp(c1 * (0.62 + 1.25 * lum2) * (0.92 + 0.16 * blend), 0.0, 1.4);
-  l.normal = normalize(unpackN(n1.rgb) + unpackN(n2.rgb) * vec3(0.75, 0.75, 0.0));
-  l.rough = clamp(n1.a * 0.7 + n2.a * 0.3, 0.0, 1.0);
+  l.albedo = clamp(mix(texture2D(D, uvA).rgb, texture2D(D, uvB).rgb, m) * shade, 0.0, 1.4);
+  l.normal = normalize(mix(unpackN(nA.rgb), unpackN(nB.rgb), m));
+  l.rough = mix(nA.a, nB.a, m);
   return l;
 }
 
-Layer sampleTriplanar(sampler2D D, sampler2D N, vec3 p, vec3 n, float scale) {
+Layer sampleTriplanar(sampler2D D, sampler2D N, vec3 p, vec3 n, float scale, float shade, float mixNoise) {
   vec3 w = pow(abs(n), vec3(4.0));
   w /= (w.x + w.y + w.z);
+  // The dominant axis is sampled twice (rotated) and the two minor axes once each:
+  // grazing projections contribute little, so they do not need the same treatment.
+  float m = smoothstep(0.34, 0.66, mixNoise);
   vec2 uvX = p.zy / scale, uvY = p.xz / scale, uvZ = p.xy / scale;
+  vec2 uvX2 = ROT_A * p.zy / (scale * 1.41), uvY2 = ROT_A * p.xz / (scale * 1.41), uvZ2 = ROT_A * p.xy / (scale * 1.41);
+  vec4 sX = mix(texture2D(N, uvX), texture2D(N, uvX2), m);
+  vec4 sY = mix(texture2D(N, uvY), texture2D(N, uvY2), m);
+  vec4 sZ = mix(texture2D(N, uvZ), texture2D(N, uvZ2), m);
+  vec3 cX = mix(texture2D(D, uvX).rgb, texture2D(D, uvX2).rgb, m);
+  vec3 cY = mix(texture2D(D, uvY).rgb, texture2D(D, uvY2).rgb, m);
+  vec3 cZ = mix(texture2D(D, uvZ).rgb, texture2D(D, uvZ2).rgb, m);
   Layer l;
-  vec4 sX = texture2D(N, uvX), sY = texture2D(N, uvY), sZ = texture2D(N, uvZ);
-  l.albedo = texture2D(D, uvX).rgb * w.x + texture2D(D, uvY).rgb * w.y + texture2D(D, uvZ).rgb * w.z;
-  // Same de-tiling trick on the dominant axis, at a much larger scale.
-  vec2 uvC = (abs(n.y) > 0.5 ? p.xz : (abs(n.x) > abs(n.z) ? p.zy : p.xy)) / (scale * 6.1);
-  float lumC = dot(texture2D(D, uvC).rgb, vec3(0.299, 0.587, 0.114));
-  l.albedo = clamp(l.albedo * (0.66 + 1.15 * lumC), 0.0, 1.4);
+  l.albedo = clamp((cX * w.x + cY * w.y + cZ * w.z) * shade, 0.0, 1.4);
   l.rough = sX.a * w.x + sY.a * w.y + sZ.a * w.z;
   // Whiteout blend of the three tangent-space normals into world space (Ben Golus).
   vec3 tnX = unpackN(sX.rgb), tnY = unpackN(sY.rgb), tnZ = unpackN(sZ.rgb);
@@ -70,8 +84,12 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   float macro = texture2D(tMacro, P.xz * 0.00035).r;
   float macro2 = texture2D(tMacro, P.xz * 0.0021 + 0.37).r;
   float macro3 = texture2D(tMacro, P.xz * 0.0008 - 0.61).r;
-  // Scale-mix driven by noise, not by distance: no moving band as the camera flies.
-  float blend = clamp(macro3 * 1.4 - 0.2, 0.0, 1.0);
+  // Slow brightness variation that breaks the albedo repeat without introducing a
+  // pattern of its own. Two frequencies, mean-preserving.
+  float shade = (0.62 + 0.78 * macro3) * (0.80 + 0.42 * macro2);
+  // Non-periodic selector between the two rotated instances of every texture.
+  float mixNoise = texture2D(tMacro, P.xz * 0.0043 + 0.19).r * 0.65
+                 + texture2D(tMacro, P.xz * 0.0011 - 0.44).r * 0.35;
   float slope = 1.0 - N.y;
   float h = P.y - uSeaLevel;
 
@@ -92,15 +110,15 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   albedo = vec3(0.0); rough = 0.0;
   vec3 planarN = vec3(0.0, 0.0, 1.0) * 0.0;  // accumulated tangent-space perturbation
   vec3 cliffN = N;
-  if (wGrass > 0.004) { Layer l = samplePlanar(tGrassD, tGrassN, P.xz, 13.0, blend);
+  if (wGrass > 0.004) { Layer l = samplePlanar(tGrassD, tGrassN, P.xz, 23.0, shade, mixNoise);
     albedo += l.albedo * wGrass; rough += l.rough * wGrass; planarN += l.normal * wGrass; }
-  if (wForest > 0.004) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 8.5, blend);
+  if (wForest > 0.004) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 17.0, shade, mixNoise);
     albedo += l.albedo * wForest; rough += l.rough * wForest; planarN += l.normal * wForest; }
-  if (wSand > 0.004) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 6.0, blend);
+  if (wSand > 0.004) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 13.0, shade * 1.1, mixNoise);
     albedo += l.albedo * wSand; rough += l.rough * wSand; planarN += l.normal * wSand; }
-  if (wScree > 0.004) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 11.0, blend);
+  if (wScree > 0.004) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 25.0, shade, mixNoise);
     albedo += l.albedo * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
-  if (wCliff > 0.004) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 16.0);
+  if (wCliff > 0.004) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 27.0, shade, mixNoise);
     albedo += l.albedo * wCliff; rough += l.rough * wCliff; cliffN = l.normal; }
 
   // Normal detail fades out with distance so far hills do not shimmer.
@@ -109,10 +127,14 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   vec3 worldN = normalize(N + vec3(planarN.x, 0.0, planarN.y) * 0.85 * planarW);
   worldN = normalize(mix(worldN, mix(N, cliffN, nearFade), wCliff));
 
-  // Large-scale colour variation: dry patches, greener hollows, altitude bleaching.
-  albedo *= 0.86 + 0.30 * macro;
-  albedo = mix(albedo, albedo * vec3(0.94, 1.04, 0.80), wGrass * 0.55 * macro2);
-  albedo = mix(albedo, albedo * vec3(1.05, 1.00, 0.94), wScree * 0.5);
+  // The source photographs are shot flat and read muddy under a physical sun, so the
+  // ground gets a gentle grade: lifted overall, greener where it is grassy, warmer and
+  // paler on scree, with slow large-scale variation for dry and lush patches.
+  albedo *= (0.90 + 0.22 * macro) * uGroundLift;
+  vec3 green = albedo * vec3(0.88, 1.16, 0.72);
+  albedo = mix(albedo, green, (wGrass + wForest * 0.7) * (0.35 + 0.4 * macro2));
+  albedo = mix(albedo, albedo * vec3(1.08, 1.02, 0.94), wScree * 0.5);
+  albedo = mix(albedo, albedo * vec3(1.06, 1.03, 0.98), wSand * 0.6);
   ao = 1.0;
   rough = clamp(rough * 1.05, 0.38, 1.0);
   return worldN;

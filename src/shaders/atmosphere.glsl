@@ -60,11 +60,7 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
   float mu = dot(rd, sunDir);
   float pR = phaseRayleigh(mu), pM = phaseMie(mu, uMieG);
   vec3 sumR = vec3(0.0), sumM = vec3(0.0);
-  float sumAmb = 0.0;
   vec2 od = vec2(0.0);
-  // Average sunlight reaching the path (for the isotropic multiple-scattering term)
-  vec2 odSun0 = opticalDepthToSun(ro, sunDir, 4);
-  vec3 sunT = exp(-(BETA_R * odSun0.x + betaM * 1.1 * odSun0.y));
   for (int i = 0; i < 16; i++) {
     if (i >= steps) break;
     vec3 p = ro + rd * ((float(i) + 0.5) * ds);
@@ -77,12 +73,16 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
     vec3 att = exp(-tau);
     sumR += att * dens.x;
     sumM += att * dens.y;
-    sumAmb += exp(-(dot(BETA_R, vec3(0.333)) * od.x + uMieCoeff * 1.1 * od.y)) * dens.x;
   }
   transmittance = exp(-(BETA_R * od.x + betaM * 1.1 * od.y));
-  // Isotropic multiple scattering approximation: keeps the horizon white-blue instead of
-  // yellow, and lifts shadows in hazy air.
-  vec3 ms = sumAmb * mix(BETA_R, vec3(dot(BETA_R, vec3(0.333))), 0.5) * 0.022 * (0.6 + 0.4 * sunT) * smoothstep(-0.12, 0.15, sunDir.y);
+  // Multiple scattering, approximated. Single scattering alone extinguishes blue over a
+  // long horizon path and leaves an unnaturally saturated yellow band; in reality the
+  // light removed from the beam is re-scattered back into it and the horizon goes pale
+  // white. The term therefore grows with what the single-scatter pass lost (1 - T) and
+  // saturates instead of accumulating without bound.
+  vec3 lost = vec3(1.0) - transmittance;
+  vec3 msTint = mix(vec3(0.42, 0.55, 0.78), vec3(1.0), 0.62);
+  vec3 ms = lost * msTint * 0.030 * smoothstep(-0.14, 0.12, sunDir.y);
   return uSunIntensity * (sumR * BETA_R * pR + sumM * betaM * pM + ms);
 }
 
