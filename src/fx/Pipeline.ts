@@ -273,21 +273,20 @@ export class Pipeline {
     this.blurMat.uniforms.tDiffuse.value = this.cloudRT2.texture;
     this.blurMat.uniforms.uTexel.value.set(1 / (this.w >> 1), 1 / (this.h >> 1));
     this.blit(this.blurMat, this.cloudRT);
-    // 2b. exhaust heat haze — a layer-masked render of just the distortion cones
-    if (this.heatHaze) {
-      this.heatCamera.copy(cam);
-      this.heatCamera.layers.set(HEAT_LAYER);
+    // 2b. exhaust heat haze — a layer-masked render of just the distortion cones.
+    // The buffer is cleared either way so a propeller aircraft reads zero offset.
+    {
       const prevClear = r.getClearColor(_c1).clone();
       const prevAlpha = r.getClearAlpha();
       r.setClearColor(0x000000, 0);
       r.setRenderTarget(this.heatRT);
       r.clear(true, false, false);
-      r.render(this.scene, this.heatCamera);
+      if (this.heatHaze) {
+        this.heatCamera.copy(cam);
+        this.heatCamera.layers.set(HEAT_LAYER);
+        r.render(this.scene, this.heatCamera);
+      }
       r.setClearColor(prevClear, prevAlpha);
-    } else {
-      r.setRenderTarget(this.heatRT);
-      r.setClearColor(0x000000, 0);
-      r.clear(true, false, false);
     }
     // 3. god rays
     this.godMaskMat.uniforms.uSunVisible.value = this.sunVisible;

@@ -158,19 +158,42 @@ async function boot() {
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
 
-  // Debug/reproducible views: ?pos=x,y,z&hour=h&mode=orbit|chase|cockpit&heading=deg
-  if (params.has('pos')) { const [x, y, z] = params.get('pos')!.split(',').map(Number); fm.position.set(x, y, z); fm.velocity.set(0, 0, 0); }
-  if (params.has('heading')) {
-    // heading 0 = north (-Z); rotating +Z about +Y by (180 - heading) lands there.
-    fm.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(180 - Number(params.get('heading'))));
-    fm.syncBasis();
-  }
-  if (params.has('hour')) timeSlider.set(Number(params.get('hour')));
-  if (params.has('mode')) rig.mode = params.get('mode') as any;
-  if (params.has('freeze')) paused = true;
-  if (params.has('debug')) post.debugView = params.get('debug') as any;
-  if (params.has('orbit')) { const [t, p, d] = params.get('orbit')!.split(',').map(Number); rig.orbit.theta = t; rig.orbit.phi = p; rig.orbit.dist = d; }
-  if (params.has('speed')) { fm.syncBasis(); fm.velocity.copy(fm.forward).multiplyScalar(Number(params.get('speed'))); }
+  /**
+   * Reproducible views for development and for grabbing reference stills:
+   * ?pos=x,y,z &heading=deg &speed=m/s &hour=h &mode=chase|cockpit|orbit &freeze &aircraft=id
+   * Applied after the aircraft is equipped, since equipping puts it back on the runway.
+   */
+  /**
+   * Reproducible views for development and for grabbing reference stills:
+   *   ?pos=x,y,z &heading=deg &speed=m/s &hour=h &mode=chase|cockpit|orbit
+   *   &orbit=theta,phi,dist &freeze &debug=clouds|ao|god|depth &aircraft=cessna|mig29
+   * Applied after the aircraft is equipped, because equipping puts it back on the runway.
+   */
+  const applyDebugParams = () => {
+    if (params.has('pos')) {
+      const [x, y, z] = params.get('pos')!.split(',').map(Number);
+      fm.position.set(x, y, z);
+      fm.velocity.set(0, 0, 0);
+    }
+    if (params.has('heading')) {
+      // heading 0 = north (-Z); rotating +Z about +Y by (180 - heading) lands there.
+      fm.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(180 - Number(params.get('heading'))));
+      fm.syncBasis();
+    }
+    if (params.has('hour')) timeSlider.set(Number(params.get('hour')));
+    if (params.has('mode')) rig.mode = params.get('mode') as any;
+    if (params.has('freeze')) paused = true;
+    if (params.has('debug')) post.debugView = params.get('debug') as any;
+    if (params.has('orbit')) {
+      const [t, ph, d] = params.get('orbit')!.split(',').map(Number);
+      rig.orbit.theta = t; rig.orbit.phi = ph; rig.orbit.dist = d;
+    }
+    if (params.has('gear')) { fm.gear = fm.gearTarget = Number(params.get('gear')); }
+    if (params.has('speed')) { fm.syncBasis(); fm.velocity.copy(fm.forward).multiplyScalar(Number(params.get('speed'))); }
+  };
+
+
+
   (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId };
 
   let last = performance.now();
@@ -269,6 +292,7 @@ async function boot() {
     }
   }
   equip(byId(chosen));
+  applyDebugParams();
 
   // Settle the streaming systems and the camera springs before the first painted frame.
   for (let i = 0; i < 8; i++) tick(1 / 60);

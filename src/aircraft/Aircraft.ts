@@ -5,6 +5,7 @@ import { applyAerialPerspective } from '../sky/AerialPerspective';
 import { applyLivery, applyCockpitMetal, applyTyre, applyCabinTrim, applyMigLivery, applyThermalMetal, applyCanopy, rootInverse } from './Livery';
 import { Instruments } from './Instruments';
 import { InstrumentsSoviet } from './InstrumentsSoviet';
+import { HeadUpDisplay } from './HeadUpDisplay';
 import { AircraftConfig } from './AircraftConfig';
 import { clamp, lerp } from '../core/Noise';
 
@@ -38,6 +39,7 @@ export class Aircraft extends THREE.Group {
   materials: THREE.Material[] = [];
   glass: THREE.Mesh | null = null;
   instruments: Instruments | InstrumentsSoviet | null = null;
+  hud: HeadUpDisplay | null = null;
 
   config!: AircraftConfig;
   /** Retraction angles measured from the model, keyed by part name. */
@@ -79,9 +81,16 @@ export class Aircraft extends THREE.Group {
           } else if (m.name === 'Canopy') {
             applyCanopy(std, mesh); this.glass = mesh; replacement = std;
           } else if (m.name === 'HUD_Glass') {
-            std.transparent = true; std.opacity = 0.16; std.roughness = 0.02;
-            std.metalness = 0; std.depthWrite = false; std.color.setHex(0x9fd8b0);
-            std.emissive = new THREE.Color(0x2fbf6a); std.emissiveIntensity = 0.55;
+            // The combiner: a faint tint of its own, plus the symbology as an emissive
+            // map so it reads as projected light rather than as paint on the glass.
+            this.hud = new HeadUpDisplay(1024);
+            std.transparent = true; std.opacity = 0.22; std.roughness = 0.02;
+            std.metalness = 0; std.depthWrite = false; std.color.setHex(0x8fd0a8);
+            std.emissive = new THREE.Color(0xffffff);
+            std.emissiveMap = this.hud.texture;
+            std.emissiveIntensity = 2.4;
+            std.alphaMap = this.hud.texture;
+            std.blending = THREE.AdditiveBlending;
             mesh.castShadow = false; mesh.renderOrder = 11;
             replacement = std;
           } else if (m.name === 'Cockpit_Dark') {
@@ -245,6 +254,7 @@ export class Aircraft extends THREE.Group {
   update(dt: number, fm: FlightModel, night: number) {
     this.t += dt;
     this.instruments?.update(fm.state, dt, performance.now());
+    this.hud?.update(fm.state, performance.now());
     this.position.copy(fm.position);
     this.quaternion.copy(fm.quaternion);
     // The livery is evaluated in aircraft space, so the shaders need world -> root.
