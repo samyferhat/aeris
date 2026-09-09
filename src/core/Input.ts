@@ -96,7 +96,7 @@ export class Input {
       if (p.buttons[1]?.pressed) c.throttle = clamp01(c.throttle + dt * 0.5);
       if (p.buttons[2]?.pressed) c.brake = true;
       this.orbitDelta.x += rx * 8; this.orbitDelta.y += ry * 8;
-      const map: Record<number, string> = { 3: 'camera', 9: 'reset', 8: 'pause', 12: 'flapsUp', 13: 'flapsDown', 4: 'timeDown', 5: 'timeUp' };
+      const map: Record<number, string> = { 3: 'camera', 9: 'reset', 8: 'pause', 12: 'flapsUp', 13: 'flapsDown', 4: 'timeDown', 5: 'timeUp', 10: 'gear' };
       p.buttons.forEach((b, i) => {
         if (b.pressed && !this.padButtonsPrev[i] && map[i]) this.onAction?.(map[i]);
         this.padButtonsPrev[i] = b.pressed;
@@ -110,7 +110,7 @@ export class Input {
     // --- one-shot keys
     const keyMap: Record<string, string> = {
       KeyC: 'camera', KeyR: 'reset', KeyP: 'pause', Escape: 'pause', KeyF: 'flapsUp', KeyV: 'flapsDown',
-      BracketLeft: 'timeDown', BracketRight: 'timeUp', KeyH: 'hud', KeyM: 'mute',
+      BracketLeft: 'timeDown', BracketRight: 'timeUp', KeyH: 'hud', KeyM: 'mute', KeyG: 'gear',
     };
     for (const code of this.pressed) if (keyMap[code]) this.onAction?.(keyMap[code]);
     this.pressed.clear();

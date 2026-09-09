@@ -10,6 +10,7 @@ import { Ocean } from './water/Ocean';
 import { Atmosphere } from './sky/Atmosphere';
 import { DynamicEnvironment } from './sky/Environment';
 import { FlightModel } from './aircraft/FlightModel';
+import { CESSNA, MIG29, AIRCRAFT, byId, AircraftConfig } from './aircraft/AircraftConfig';
 import { Aircraft } from './aircraft/Aircraft';
 import { CameraRig } from './aircraft/Cameras';
 import { HUD } from './ui/HUD';
@@ -17,6 +18,9 @@ import { TimeSlider } from './ui/TimeSlider';
 import { Pipeline } from './fx/Pipeline';
 import { Particles } from './fx/Particles';
 import { Audio } from './audio/Audio';
+import { Afterburner } from './fx/Afterburner';
+import { JetEffects } from './fx/JetEffects';
+import { Selection } from './ui/Selection';
 
 const _size = new THREE.Vector2();
 const smoothstepJS = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -25,6 +29,7 @@ const loadingMsg = document.querySelector('#loading .msg') as HTMLElement;
 const progress = (p: number, msg: string) => { loadingFill.style.width = `${Math.round(p * 100)}%`; loadingMsg.textContent = msg; };
 
 async function boot() {
+  const params = new URLSearchParams(location.search);
   progress(0.05, 'Génération de l’archipel');
   await new Promise((r) => setTimeout(r, 30));
   const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -60,30 +65,68 @@ async function boot() {
   engine.setupShadowMaterial(ocean.material);
   runway.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.Material; if (m && !(m as any)._csm) { (m as any)._csm = true; engine.setupShadowMaterial(m); } });
 
-  progress(0.55, 'Avion');
-  const fm = new FlightModel(hf);
+  // ---- aircraft ----------------------------------------------------------
+  progress(0.55, 'Appareils');
+  const fm = new FlightModel(hf, CESSNA);
+  const loaded = new Map<string, Aircraft>();
+  for (let i = 0; i < AIRCRAFT.length; i++) {
+    const cfg = AIRCRAFT[i];
+    try {
+      const ac = await Aircraft.load(cfg, (p) => progress(0.55 + (i + p) / AIRCRAFT.length * 0.28, `Appareil · ${cfg.name}`));
+      loaded.set(cfg.id, ac);
+    } catch (e) {
+      console.warn(`${cfg.name}: model unavailable`, e);
+    }
+  }
+
   let aircraft: Aircraft | null = null;
-  try {
-    aircraft = await Aircraft.load('/models/cessna.glb', (p) => progress(0.55 + p * 0.3, 'Avion'));
+  let afterburner: Afterburner | null = null;
+  let jetEffects: JetEffects | null = null;
+
+  /** Puts one of the loaded aircraft into the world and points everything at it. */
+  const equip = (cfg: AircraftConfig) => {
+    if (aircraft) {
+      scene.remove(aircraft);
+      if (afterburner) { aircraft.remove(afterburner); afterburner = null; }
+      if (jetEffects) { aircraft.remove(jetEffects); jetEffects = null; }
+    }
+    aircraft = loaded.get(cfg.id) ?? null;
+    fm.setConfig(cfg);
+    rig.setConfig(cfg);
+    audio.setProfile(cfg.propulsion);
+    post.heatHaze = cfg.propulsion === 'turbofan';
+    if (!aircraft) return;
     scene.add(aircraft);
     const wl = aircraft.wheelLocals();
-    if (wl.nose && wl.left && wl.right) fm.setWheels([
-      { name: 'nose', local: wl.nose, steer: true, brake: false },
-      { name: 'left', local: wl.left, steer: false, brake: true },
-      { name: 'right', local: wl.right, steer: false, brake: true }]);
+    if (wl.nose && wl.left && wl.right) {
+      fm.setWheels([
+        { name: 'nose', local: wl.nose, steer: true, brake: false },
+        { name: 'left', local: wl.left, steer: false, brake: true },
+        { name: 'right', local: wl.right, steer: false, brake: true }]);
+    }
     if (aircraft.locators.Camera_Pilot) rig.pilotEye.copy(aircraft.locators.Camera_Pilot);
     for (const m of aircraft.materials) if (!(m as THREE.ShaderMaterial).isShaderMaterial) engine.setupShadowMaterial(m);
-  } catch (e) {
-    console.warn('Aircraft model not available yet', e);
-  }
-  fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2);
+
+    if (cfg.propulsion === 'turbofan') {
+      const exits = ['Nozzle_Exit_L', 'Nozzle_Exit_R']
+        .map((n) => aircraft!.locators[n])
+        .filter(Boolean) as THREE.Vector3[];
+      if (exits.length) {
+        afterburner = new Afterburner(exits, 0.58, 11);
+        aircraft.add(afterburner);
+      }
+      jetEffects = new JetEffects(cfg.span, 17);
+      aircraft.add(jetEffects);
+    }
+    fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2);
+  };
 
   const particles = new Particles();
   scene.add(particles);
   const audio = new Audio();
   audio.attach(canvas);
 
-  progress(0.9, 'Post-traitement');
+  progress(0.92, 'Post-traitement');
   const post = new Pipeline(renderer, scene, camera);
   const hud = new HUD();
   const timeSlider = new TimeSlider(atmosphere.hour);
@@ -109,12 +152,12 @@ async function boot() {
       case 'timeDown': timeSlider.set(timeSlider.value - 0.5); break;
       case 'hud': hud.toggle(); break;
       case 'mute': audio.toggleMute(); break;
+      case 'gear': if (fm.config.retractableGear) fm.gearTarget = fm.gearTarget > 0.5 ? 0 : 1; break;
     }
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
 
   // Debug/reproducible views: ?pos=x,y,z&hour=h&mode=orbit|chase|cockpit&heading=deg
-  const params = new URLSearchParams(location.search);
   if (params.has('pos')) { const [x, y, z] = params.get('pos')!.split(',').map(Number); fm.position.set(x, y, z); fm.velocity.set(0, 0, 0); }
   if (params.has('heading')) {
     // heading 0 = north (-Z); rotating +Z about +Y by (180 - heading) lands there.
@@ -127,11 +170,11 @@ async function boot() {
   if (params.has('debug')) post.debugView = params.get('debug') as any;
   if (params.has('orbit')) { const [t, p, d] = params.get('orbit')!.split(',').map(Number); rig.orbit.theta = t; rig.orbit.phi = p; rig.orbit.dist = d; }
   if (params.has('speed')) { fm.syncBasis(); fm.velocity.copy(fm.forward).multiplyScalar(Number(params.get('speed'))); }
-  document.getElementById('overlay')!.classList.add('gone');
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId };
 
   let last = performance.now();
   let turbulence = 0;
+  let tunnel = 0;
 
   /** One simulation + render step. Split out of the rAF loop so tools can drive it. */
   const tick = (dt: number) => {
@@ -168,11 +211,19 @@ async function boot() {
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
     engine.csm.update();
+    afterburner?.update(dt, fm.state, atmosphere.night);
+    jetEffects?.update(dt, fm.state);
+    // Grey-out: the eye loses blood pressure a beat after the g arrives, and recovers
+    // more slowly still, so the effect is filtered rather than instantaneous.
+    const gStrain = Math.max(0, (Math.abs(fm.state.gLoad) - 4.2) / (fm.config.gLimit - 3.0));
+    tunnel += (Math.min(1, gStrain) - tunnel) * (1 - Math.exp(-dt * (gStrain > tunnel ? 0.55 : 1.6)));
+    post.tunnelVision = rig.mode === 'cockpit' ? tunnel : tunnel * 0.45;
     if (aircraft) {
       particles.setLight(atmosphere.sunDir, atmosphere.sunColor);
       // Metres-at-one-metre to pixels: the projection scale for point sprites.
       const pixelScale = renderer.getDrawingBufferSize(_size).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-      particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators, pixelScale, atmosphere.night);
+      particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators, pixelScale,
+        atmosphere.night, fm.config.propulsion);
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
@@ -189,6 +240,35 @@ async function boot() {
 
   (window as any).__aeris.tick = tick;
   (window as any).__aeris.warm = (n = 90, dt = 1 / 60) => { for (let i = 0; i < n; i++) tick(dt); };
+
+  // ---- pre-flight selection ----------------------------------------------
+  progress(1, 'Prêt');
+  document.getElementById('overlay')!.classList.add('gone');
+  let chosen = params.get('aircraft');
+  if (!chosen || !loaded.has(chosen)) {
+    const entries = AIRCRAFT.filter((c) => loaded.has(c.id)).map((c) => ({ config: c, object: loaded.get(c.id)! }));
+    if (entries.length > 1) {
+      const selection = new Selection(renderer, scene.environment, entries);
+      let selLast = performance.now();
+      const selLoop = () => {
+        if (selection.isDone) return;
+        requestAnimationFrame(selLoop);
+        const now = performance.now();
+        const sdt = Math.min(0.05, (now - selLast) / 1000);
+        selLast = now;
+        renderer.setRenderTarget(null);
+        renderer.clear();
+        selection.render(sdt);
+      };
+      selLoop();
+      chosen = await selection.pick();
+      selection.dispose();
+    } else {
+      chosen = entries[0]?.config.id ?? 'cessna';
+    }
+  }
+  equip(byId(chosen));
+
   // Settle the streaming systems and the camera springs before the first painted frame.
   for (let i = 0; i < 8; i++) tick(1 / 60);
 

@@ -45,6 +45,21 @@ export class Audio {
   private rumbleGain!: GainNode;
   private rumbleFilter!: BiquadFilterNode;
   private cabinFilter!: BiquadFilterNode;
+  // --- turbine voice -------------------------------------------------------
+  private whine!: OscillatorNode;
+  private whineGain!: GainNode;
+  private whineFilter!: BiquadFilterNode;
+  private buzz!: OscillatorNode;
+  private buzzGain!: GainNode;
+  private roarSrcJet!: AudioBufferSourceNode;
+  private roarJetFilter!: BiquadFilterNode;
+  private roarJetGain!: GainNode;
+  private abSrc!: AudioBufferSourceNode;
+  private abFilter!: BiquadFilterNode;
+  private abGain!: GainNode;
+  private profile: 'propeller' | 'turbofan' = 'propeller';
+  private wasSupersonic = false;
+
   private prevCamPos = new THREE.Vector3();
   private haveCamPos = false;
   muted = false;
@@ -170,8 +185,68 @@ export class Audio {
     toBus(this.rumbleGain);
     this.rumbleSrc.start();
 
+    this.buildTurbine(ctx, noise, toBus);
     this.master.gain.setTargetAtTime(0.85, ctx.currentTime, 1.2);
   }
+
+  /**
+   * A turbofan sounds nothing like a piston engine, and the difference is structural
+   * rather than a matter of pitch:
+   *   * the fan's blade-passing tone — dozens of blades times shaft speed, so a whine
+   *     one to three kilohertz up, with the "buzz saw" of the supersonic blade tips
+   *     underneath it;
+   *   * the core roar — broadband, low, and much louder than anything a light aircraft
+   *     makes;
+   *   * reheat — a separate, deeper roar with far more low-frequency energy, which is
+   *     what you feel in the chest rather than hear.
+   */
+  private buildTurbine(ctx: AudioContext, noise: AudioBuffer, toBus: (n: AudioNode) => void) {
+    this.whineFilter = ctx.createBiquadFilter();
+    this.whineFilter.type = 'bandpass';
+    this.whineFilter.frequency.value = 2000;
+    this.whineFilter.Q.value = 2.4;
+    this.whineGain = ctx.createGain(); this.whineGain.gain.value = 0;
+    this.whineFilter.connect(this.whineGain);
+    toBus(this.whineGain);
+    this.whine = ctx.createOscillator();
+    // A rich, slightly metallic wave: the fan tone plus its first few harmonics.
+    const real = new Float32Array([0, 1.0, 0.42, 0.30, 0.16, 0.10, 0.06]);
+    this.whine.setPeriodicWave(ctx.createPeriodicWave(real, new Float32Array(real.length)));
+    this.whine.frequency.value = 400;
+    this.whine.connect(this.whineFilter);
+    this.whine.start();
+
+    // Buzz saw: a sub-octave sawtooth that appears as the fan tips go supersonic.
+    this.buzz = ctx.createOscillator();
+    this.buzz.type = 'sawtooth';
+    this.buzz.frequency.value = 120;
+    const buzzFilter = ctx.createBiquadFilter();
+    buzzFilter.type = 'bandpass'; buzzFilter.frequency.value = 700; buzzFilter.Q.value = 1.1;
+    this.buzzGain = ctx.createGain(); this.buzzGain.gain.value = 0;
+    this.buzz.connect(buzzFilter); buzzFilter.connect(this.buzzGain);
+    toBus(this.buzzGain);
+    this.buzz.start();
+
+    this.roarSrcJet = ctx.createBufferSource();
+    this.roarSrcJet.buffer = noise; this.roarSrcJet.loop = true;
+    this.roarJetFilter = ctx.createBiquadFilter();
+    this.roarJetFilter.type = 'bandpass'; this.roarJetFilter.frequency.value = 260; this.roarJetFilter.Q.value = 0.55;
+    this.roarJetGain = ctx.createGain(); this.roarJetGain.gain.value = 0;
+    this.roarSrcJet.connect(this.roarJetFilter); this.roarJetFilter.connect(this.roarJetGain);
+    toBus(this.roarJetGain);
+    this.roarSrcJet.start();
+
+    this.abSrc = ctx.createBufferSource();
+    this.abSrc.buffer = noise; this.abSrc.loop = true;
+    this.abFilter = ctx.createBiquadFilter();
+    this.abFilter.type = 'lowpass'; this.abFilter.frequency.value = 150; this.abFilter.Q.value = 1.6;
+    this.abGain = ctx.createGain(); this.abGain.gain.value = 0;
+    this.abSrc.connect(this.abFilter); this.abFilter.connect(this.abGain);
+    toBus(this.abGain);
+    this.abSrc.start();
+  }
+
+  setProfile(profile: 'propeller' | 'turbofan') { this.profile = profile; }
 
   private noiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
     const n = Math.floor(ctx.sampleRate * seconds);
@@ -245,10 +320,44 @@ export class Audio {
     this.prevCamPos.copy(listenerPos);
     this.haveCamPos = true;
 
+    const jet = this.profile === 'turbofan';
+    if (jet) {
+      // N1 as a fraction; the config reports it directly as 0..100.
+      const n1 = clamp01(s.rpm / 100);
+      const running = n1 > 0.05 ? 1 : 0;
+      // Fan blade passing: 30-odd blades on the shaft.
+      const fan = 45 + n1 * 330;
+      this.whine.frequency.setTargetAtTime(fan * 4.4 * doppler, t, k);
+      this.whineFilter.frequency.setTargetAtTime(700 + n1 * 2600, t, k);
+      this.buzz.frequency.setTargetAtTime(fan * doppler, t, k);
+      const atten = inside ? 1 : Math.min(1, 55 / Math.max(24, dist));
+      // From inside the cockpit the fan tone is muffled by the airframe; from outside
+      // it is the loudest thing about a fighter until the reheat lights.
+      this.whineGain.gain.setTargetAtTime(running * (inside ? 0.045 : 0.16) * (0.25 + 0.85 * n1) * atten, t, k);
+      this.buzzGain.gain.setTargetAtTime(running * (inside ? 0.02 : 0.085) * smoothstepJS(0.55, 0.95, n1) * atten, t, k);
+      this.roarJetFilter.frequency.setTargetAtTime(150 + n1 * 260, t, k);
+      this.roarJetGain.gain.setTargetAtTime(running * (inside ? 0.20 : 0.30) * (0.2 + 0.9 * n1) * atten, t, k);
+      this.abFilter.frequency.setTargetAtTime(90 + s.afterburner * 130, t, k);
+      this.abGain.gain.setTargetAtTime(s.afterburner * (inside ? 0.34 : 0.52) * atten, t, k);
+      // Silence the piston voice.
+      this.engineGain.gain.setTargetAtTime(0, t, k);
+      this.roarGain.gain.setTargetAtTime(0, t, k);
+      this.propGain.gain.setTargetAtTime(0, t, k);
+      // Crossing the sound barrier, once per crossing and only heard from outside.
+      const supersonic = s.mach > 1.0;
+      if (supersonic !== this.wasSupersonic && !inside && s.mach > 0.5) this.boom();
+      this.wasSupersonic = supersonic;
+    } else {
+      this.whineGain.gain.setTargetAtTime(0, t, k);
+      this.buzzGain.gain.setTargetAtTime(0, t, k);
+      this.roarJetGain.gain.setTargetAtTime(0, t, k);
+      this.abGain.gain.setTargetAtTime(0, t, k);
+    }
+
     // --- engine --------------------------------------------------------------
     // Four cylinders, four-stroke: two firing events per revolution.
     const fire = (s.rpm / 60) * 2;
-    const running = s.rpm > 200 ? 1 : 0;
+    const running = !jet && s.rpm > 200 ? 1 : 0;
     this.engineOsc.frequency.setTargetAtTime(Math.max(10, fire * doppler), t, k);
     this.engineOsc2.frequency.setTargetAtTime(Math.max(20, fire * 2 * doppler), t, k);
     // Distance attenuation: inverse with a floor, plus air absorption of the highs.
@@ -283,6 +392,30 @@ export class Audio {
     this.outsideSend.gain.setTargetAtTime(inside ? 0.0 : 0.16, t, 0.25);
     this.dry.gain.setTargetAtTime(inside ? 0.85 : 1.0, t, 0.25);
     this.cabinFilter.frequency.setTargetAtTime(inside ? 2400 : 18000, t, 0.25);
+  }
+
+  /**
+   * Sonic boom. The N-wave that reaches an observer is a sharp over-pressure, a ramp
+   * down through ambient, and a second sharp recovery — heard as a double crack rather
+   * than one bang, which is the detail that makes it recognisable.
+   */
+  boom() {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (const [delay, level] of [[0, 1.0], [0.09, 0.72]] as [number, number][]) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer(ctx, 0.6);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(1800, t + delay);
+      lp.frequency.exponentialRampToValueAtTime(90, t + delay + 0.5);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + delay);
+      g.gain.exponentialRampToValueAtTime(0.85 * level, t + delay + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + delay + 0.55);
+      src.connect(lp); lp.connect(g); g.connect(this.dry); g.connect(this.outsideSend);
+      src.start(t + delay); src.stop(t + delay + 0.6);
+    }
   }
 
   /** One-shot: tyres chirping on touchdown. */
@@ -320,3 +453,5 @@ export class Audio {
 }
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+const smoothstepJS = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };

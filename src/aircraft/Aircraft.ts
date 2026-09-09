@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FlightModel } from './FlightModel';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
-import { applyLivery, applyCockpitMetal, applyTyre, applyCabinTrim, rootInverse } from './Livery';
+import { applyLivery, applyCockpitMetal, applyTyre, applyCabinTrim, applyMigLivery, applyThermalMetal, applyCanopy, rootInverse } from './Livery';
 import { Instruments } from './Instruments';
+import { InstrumentsSoviet } from './InstrumentsSoviet';
+import { AircraftConfig } from './AircraftConfig';
 import { clamp, lerp } from '../core/Noise';
 
 const deg = THREE.MathUtils.degToRad;
@@ -13,6 +15,7 @@ const _tmpN = new THREE.Vector3();
 const INTERIOR_MATERIALS = new Set([
   'Cockpit_Carpet', 'Cockpit_Trim', 'Cockpit_Plastic', 'Gauge_Faces',
   'Cockpit_Metal_Worn', 'Leather_Seat',
+  'Cockpit_Dark', 'Seat_Fabric', 'Warning_Stripe',
 ]);
 
 /**
@@ -30,13 +33,21 @@ export class Aircraft extends THREE.Group {
   private t = 0;
   gearCompression = [0, 0, 0];
   private wheelSpin = [0, 0, 0];
+  private airbrake = 0;
+  private grille = 0;
   materials: THREE.Material[] = [];
   glass: THREE.Mesh | null = null;
-  instruments: Instruments | null = null;
+  instruments: Instruments | InstrumentsSoviet | null = null;
 
-  static async load(url: string, onProgress?: (p: number) => void): Promise<Aircraft> {
-    const gltf = await new GLTFLoader().loadAsync(url, (e) => onProgress?.(e.total ? e.loaded / e.total : 0.5));
+  config!: AircraftConfig;
+  /** Retraction angles measured from the model, keyed by part name. */
+  private gearRetract: Record<string, { axis: THREE.Vector3; angle: number }> = {};
+  private gearDoorOpen: Record<string, { axis: THREE.Vector3; angle: number }> = {};
+
+  static async load(config: AircraftConfig, onProgress?: (p: number) => void): Promise<Aircraft> {
+    const gltf = await new GLTFLoader().loadAsync(config.model, (e) => onProgress?.(e.total ? e.loaded / e.total : 0.5));
     const ac = new Aircraft();
+    ac.config = config;
     ac.setup(gltf.scene);
     return ac;
   }
@@ -61,6 +72,20 @@ export class Aircraft extends THREE.Group {
           std.envMapIntensity = INTERIOR_MATERIALS.has(m.name) ? 2.2 : 1.0;
           if (m.name === 'Paint_Body') {
             replacement = applyLivery(std);
+          } else if (m.name === 'Paint_Camo') {
+            replacement = applyMigLivery(std);
+          } else if (m.name === 'Metal_Nozzle') {
+            applyThermalMetal(std); replacement = std;
+          } else if (m.name === 'Canopy') {
+            applyCanopy(std, mesh); this.glass = mesh; replacement = std;
+          } else if (m.name === 'HUD_Glass') {
+            std.transparent = true; std.opacity = 0.16; std.roughness = 0.02;
+            std.metalness = 0; std.depthWrite = false; std.color.setHex(0x9fd8b0);
+            std.emissive = new THREE.Color(0x2fbf6a); std.emissiveIntensity = 0.55;
+            mesh.castShadow = false; mesh.renderOrder = 11;
+            replacement = std;
+          } else if (m.name === 'Cockpit_Dark') {
+            applyCabinTrim(std, 'plastic'); replacement = std;
           } else if (m.name === 'Glass') {
             this.setupGlass(std, mesh); replacement = std;
           } else if (m.name === 'PropBlur') {
@@ -78,7 +103,7 @@ export class Aircraft extends THREE.Group {
             applyCabinTrim(std, 'carpet'); replacement = std;
           } else if (m.name === 'Gauge_Faces') {
             // Swap the still atlas for a canvas that is redrawn from the flight state.
-            this.instruments = new Instruments(1024);
+            this.instruments = this.config?.id === 'mig29' ? new InstrumentsSoviet(1024) : new Instruments(1024);
             std.map = this.instruments.texture;
             // Instruments are internally lit; without emissive they vanish in the shade.
             std.emissive = new THREE.Color(0xffffff);
@@ -105,9 +130,17 @@ export class Aircraft extends THREE.Group {
         mesh.position.addScaledVector(mean.normalize(), 0.025);
       }
     });
-    for (const n of ['Aileron_L', 'Aileron_R', 'Elevator', 'Rudder', 'Flap_L', 'Flap_R', 'Gear_Nose', 'Gear_L', 'Gear_R', 'Yoke_L', 'Propeller', 'Wheel_Nose', 'Wheel_L', 'Wheel_R'])
+    for (const n of [
+      'Aileron_L', 'Aileron_R', 'Elevator', 'Rudder', 'Flap_L', 'Flap_R',
+      'Gear_Nose', 'Gear_L', 'Gear_R', 'Yoke_L', 'Propeller', 'Wheel_Nose', 'Wheel_L', 'Wheel_R',
+      'Stabilator_L', 'Stabilator_R', 'Rudder_L', 'Rudder_R', 'Slat_L', 'Slat_R',
+      'Airbrake', 'Nozzle_L', 'Nozzle_R', 'Stick', 'Throttles',
+      'GearDoor_Nose', 'GearDoor_L', 'GearDoor_R', 'IntakeGrille_L', 'IntakeGrille_R'])
       if (this.parts[n]) this.rest[n] = { pos: this.parts[n].position.clone(), quat: this.parts[n].quaternion.clone() };
-    for (const n of ['Camera_Pilot', 'Exhaust', 'Wingtip_L', 'Wingtip_R', 'Contact_Nose', 'Contact_L', 'Contact_R', 'Nav_L', 'Nav_R', 'Beacon', 'Strobe_Tail'])
+    for (const n of [
+      'Camera_Pilot', 'Exhaust', 'Wingtip_L', 'Wingtip_R', 'Contact_Nose', 'Contact_L', 'Contact_R',
+      'Nav_L', 'Nav_R', 'Beacon', 'Strobe_Tail',
+      'Nozzle_Exit_L', 'Nozzle_Exit_R', 'LERX_L', 'LERX_R'])
       if (this.parts[n]) { this.updateMatrixWorld(true); this.locators[n] = this.parts[n].getWorldPosition(new THREE.Vector3()).sub(this.getWorldPosition(new THREE.Vector3())); }
     this.setupLights();
     this.setupCabinLight();
@@ -166,8 +199,10 @@ export class Aircraft extends THREE.Group {
    * keeps it from leaking onto the airframe outside.
    */
   private setupCabinLight() {
+    const eye = this.locators.Camera_Pilot;
     const light = new THREE.PointLight(0xbcd0e6, 0, 3.2, 2.0);
-    light.position.set(0, 0.55, -0.15);
+    if (eye) light.position.set(0, eye.y - 0.1, eye.z - 0.15);
+    else light.position.set(0, 0.55, -0.15);
     light.castShadow = false;
     this.add(light);
     this.cabinLight = light;
@@ -231,29 +266,71 @@ export class Aircraft extends THREE.Group {
     set('Rudder', Y, deg(24) * fm.rudder);
     set('Flap_L', X, -deg(30) * fm.flaps);
     set('Flap_R', X, -deg(30) * fm.flaps);
-    // Propeller
-    const radPerSec = fm.rpm / 60 * Math.PI * 2;
-    this.propAngle = (this.propAngle + radPerSec * dt) % (Math.PI * 2);
-    set('Propeller', Z, -this.propAngle);   // right-hand tractor: clockwise seen from the cockpit
-    if (this.propDiscMaterial) { this.propDiscMaterial.uniforms.uRpm.value = fm.rpm; this.propDiscMaterial.uniforms.uAngle.value = this.propAngle * 0.13; }
-    // Blades fade as the disc takes over (keeps a believable blur, not a solid disc)
-    const prop = this.parts['Propeller'] as THREE.Mesh | undefined;
-    if (prop) prop.visible = fm.rpm < 1500;
-    // Gear compression + wheels
-    const names = ['Gear_Nose', 'Gear_L', 'Gear_R'], wheels = ['Wheel_Nose', 'Wheel_L', 'Wheel_R'];
-    for (let i = 0; i < 3; i++) {
-      const comp = fm.state.wheelCompression[i] ?? 0;
-      this.gearCompression[i] = lerp(this.gearCompression[i], comp, 1 - Math.exp(-dt * 14));
-      const g = this.parts[names[i]], r = this.rest[names[i]];
-      if (g && r) g.position.copy(r.pos).add(new THREE.Vector3(0, this.gearCompression[i] * 0.9, 0));
-      const w = this.parts[wheels[i]], wr = this.rest[wheels[i]];
-      if (w && wr) {
-        if (fm.state.wheelOnGround[i]) this.wheelSpin[i] += fm.state.groundSpeed / 0.24 * dt;
-        else this.wheelSpin[i] += Math.max(0, fm.state.groundSpeed - 5) * 0.2 * dt * Math.exp(-this.t % 3);
-        w.quaternion.copy(wr.quat).multiply(new THREE.Quaternion().setFromAxisAngle(X, this.wheelSpin[i]));
-        if (i === 0) w.parent && (w.parent.rotation.y = -fm.rudder * 0.45 * (fm.state.onGround ? 1 : 0));
-      }
+
+    // --- fighter surfaces --------------------------------------------------
+    // All-moving stabilators: symmetric for pitch, differential for roll assist, which
+    // is where most of a Fulcrum's roll authority actually comes from at speed.
+    const roll = fm.aileron;
+    set('Stabilator_L', X, deg(18) * fm.elevator - deg(7) * roll);
+    set('Stabilator_R', X, deg(18) * fm.elevator + deg(7) * roll);
+    set('Rudder_L', Y, deg(22) * fm.rudder);
+    set('Rudder_R', Y, deg(22) * fm.rudder);
+    // Leading-edge slats schedule with angle of attack, as the real ones do.
+    const slat = clamp(fm.state.alpha / 0.30, 0, 1) * (1 - 0.5 * clamp(fm.state.mach - 0.7, 0, 1));
+    set('Slat_L', X, deg(18) * slat);
+    set('Slat_R', X, deg(18) * slat);
+    // Airbrake: out whenever the throttle is closed and there is speed to kill.
+    const brakeOut = clamp((0.22 - fm.state.throttle) * 5, 0, 1) * clamp((fm.state.airspeed - 60) / 60, 0, 1);
+    this.airbrake = lerp(this.airbrake, fm.state.onGround && fm.state.groundSpeed > 20 ? 1 : brakeOut, 1 - Math.exp(-dt * 2.5));
+    set('Airbrake', X, deg(45) * this.airbrake);
+    // Nozzles: convergent at idle, wide open in reheat.
+    const nozzleOpen = 0.35 + 0.65 * clamp(fm.power * 1.1 - 0.05, 0, 1) + 0.5 * fm.state.afterburner;
+    for (const n of ['Nozzle_L', 'Nozzle_R']) {
+      const part = this.parts[n], rest = this.rest[n];
+      if (part && rest) part.scale.setScalar(0.88 + 0.20 * nozzleOpen);
     }
+    // Stick and throttle move with the inputs, visible from the pilot's seat.
+    const stick = this.parts['Stick'], stickRest = this.rest['Stick'];
+    if (stick && stickRest) {
+      stick.quaternion.copy(stickRest.quat)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(X, deg(14) * fm.elevator))
+        .multiply(new THREE.Quaternion().setFromAxisAngle(Z, -deg(12) * fm.aileron));
+    }
+    set('Throttles', X, deg(24) * (fm.state.throttle - 0.5));
+
+    // --- retractable gear ---------------------------------------------------
+    if (this.config?.retractableGear) {
+      const g = fm.state.gear;
+      // Doors lead the legs and close behind them, so the sequence reads properly.
+      const door = clamp(g < 0.5 ? g * 2.4 : (1 - g) * 2.4 + 0.0, 0, 1);
+      const doorOpen = g > 0.02 && g < 0.98 ? 1 : (g > 0.98 ? 0.12 : 0);
+      const legs: [string, THREE.Vector3, number][] = [
+        // Nose leg swings forward into its bay; the mains fold inboard.
+        ['Gear_Nose', X, deg(-95)],
+        ['Gear_L', Z, deg(88)],
+        ['Gear_R', Z, deg(-88)],
+      ];
+      for (const [name, axis, angle] of legs) {
+        const part = this.parts[name], rest = this.rest[name];
+        if (!part || !rest) continue;
+        part.quaternion.copy(rest.quat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle * (1 - g)));
+        part.visible = g > 0.001;
+      }
+      const doors: [string, THREE.Vector3, number][] = [
+        ['GearDoor_Nose', X, deg(85)], ['GearDoor_L', Z, deg(-80)], ['GearDoor_R', Z, deg(80)],
+      ];
+      for (const [name, axis, angle] of doors) {
+        const part = this.parts[name], rest = this.rest[name];
+        if (!part || !rest) continue;
+        part.quaternion.copy(rest.quat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle * Math.max(doorOpen, 1 - g > 0.02 ? doorOpen : 0)));
+      }
+      // Intake grilles close on the ground to keep debris out of the compressors.
+      const grille = fm.state.onGround && fm.state.groundSpeed < 40 ? 1 : 0;
+      this.grille = lerp(this.grille, grille, 1 - Math.exp(-dt * 1.4));
+      set('IntakeGrille_L', X, deg(-70) * (1 - this.grille));
+      set('IntakeGrille_R', X, deg(-70) * (1 - this.grille));
+    }
+
     // Yoke: rotate for roll, slide for pitch
     const yoke = this.parts['Yoke_L'], yr = this.rest['Yoke_L'];
     if (yoke && yr) {

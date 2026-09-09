@@ -49,6 +49,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 
 /* time slider */
 .timectl { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(420px, 60vw); display: flex; align-items: center; gap: 12px; pointer-events: auto; font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
+.timectl.hidden { opacity: 0; pointer-events: none; }
 .timectl input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; height: 2px; background: rgba(255,255,255,.25); border-radius: 1px; outline: none; cursor: pointer; }
 .timectl input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--hud); border: 1px solid rgba(0,0,0,.4); box-shadow: 0 0 0 4px rgba(255,255,255,.12); }
 .timectl .clock { font-family: 'JetBrains Mono', monospace; color: var(--hud); font-size: 13px; letter-spacing: 1px; min-width: 48px; }
@@ -64,3 +65,39 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .crash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(0,0,0,.35); font-weight: 300; letter-spacing: 6px; font-size: 22px; opacity: 0; pointer-events: none; transition: opacity .5s; }
 .crash.on { opacity: 1; }
 .crash small { font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
+
+/* ---- aircraft selection --------------------------------------------------- */
+.selection { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 28px; pointer-events: auto;
+  /* Transparent: the aircraft previews are rendered into the canvas behind this. */
+  background: transparent;
+  transition: opacity .4s ease, transform .4s ease; }
+.selection.leaving { opacity: 0; transform: scale(1.03); pointer-events: none; }
+.sel-head { text-align: center; }
+.sel-title { font-weight: 300; font-size: 30px; letter-spacing: 16px; padding-left: 16px; color: var(--hud); }
+.sel-sub { margin-top: 10px; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: var(--hud-dim); }
+.sel-cards { display: flex; gap: 22px; align-items: stretch; }
+.sel-card { position: relative; width: min(38vw, 460px); padding: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(255,255,255,.10); color: var(--hud); font: inherit; text-align: left;
+  transition: border-color .25s, transform .25s, box-shadow .25s; overflow: hidden; }
+.sel-card:hover, .sel-card.on { border-color: rgba(255,210,122,.55); transform: translateY(-4px);
+  box-shadow: 0 18px 60px -24px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.08); }
+/* The 3D preview is drawn into this rectangle by the renderer, so it stays transparent. */
+.sel-stage { height: min(30vh, 260px); width: 100%;
+  /* Only a soft vignette, so the model rendered behind stays visible. */
+  background: radial-gradient(120% 120% at 50% 40%, rgba(255,255,255,.05), rgba(0,0,0,.35) 78%); }
+.sel-body { padding: 0 0 22px; background: linear-gradient(180deg, rgba(10,14,19,.86), rgba(8,11,15,.96)); }
+.sel-meta { padding: 0 24px; }
+.sel-name { font-size: 21px; font-weight: 500; letter-spacing: 1px; }
+.sel-role { margin-top: 3px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); }
+.sel-blurb { margin: 14px 0 0; font-size: 13px; line-height: 1.5; color: rgba(235,242,248,.62); min-height: 40px; }
+.sel-specs { display: flex; gap: 26px; margin: 18px 0 0; }
+.sel-specs div { display: flex; flex-direction: column; gap: 3px; }
+.sel-specs dt { font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--hud-dim); }
+.sel-specs dd { margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 15px; }
+.sel-go { display: block; margin: 20px 24px 0; padding: 9px 0; text-align: center; font-size: 11px;
+  letter-spacing: 3px; text-transform: uppercase; border: 1px solid rgba(255,255,255,.16); border-radius: 3px;
+  color: var(--hud-dim); transition: background .25s, color .25s, border-color .25s; }
+.sel-card:hover .sel-go, .sel-card.on .sel-go { background: var(--accent); border-color: var(--accent); color: #14100a; }
+.sel-foot { font-size: 11px; letter-spacing: 2px; color: var(--hud-dim); }
+@media (max-width: 900px) { .sel-cards { flex-direction: column; } .sel-card { width: min(86vw, 460px); } .sel-stage { height: 24vh; } }

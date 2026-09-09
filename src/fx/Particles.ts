@@ -53,7 +53,7 @@ export class Particles extends THREE.Points {
           float t = clamp(aData.x / aData.y, 0.0, 1.0);
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           // Puffs expand as they age; vapour expands least, dust the most.
-          float grow = mix(1.0, aData.w < 0.5 ? 2.4 : (aData.w < 1.5 ? 4.0 : 5.5), t);
+          float grow = mix(1.0, aData.w < 0.5 ? 2.4 : (aData.w < 1.5 ? 3.4 : 3.0), t);
           // aData.z is a diameter in metres; uPixelScale converts metres at one metre of
           // depth into pixels, so the puff keeps a physical size instead of a screen one.
           gl_PointSize = clamp(aData.z * grow * uPixelScale / max(-mv.z, 1.0), 1.0, 420.0);
@@ -127,18 +127,29 @@ export class Particles extends THREE.Points {
     this.mat.uniforms.uSunColor.value.copy(sunColor);
   }
 
+  /**
+   * @param profile 'propeller' emits exhaust haze and taxi dust; 'turbofan' emits
+   *        wingtip vortices under load and contrails in cold air instead.
+   */
   update(dt: number, s: FlightState, aircraftPos: THREE.Vector3, aircraftQuat: THREE.Quaternion, velocity: THREE.Vector3,
-         locators: Record<string, THREE.Vector3>, pixelScale: number, night: number) {
+         locators: Record<string, THREE.Vector3>, pixelScale: number, night: number,
+         profile: 'propeller' | 'turbofan' = 'propeller') {
     this.mat.uniforms.uPixelScale.value = pixelScale;
+    const jet = profile === 'turbofan';
 
     // ---- wingtip vapour: only when the wing is working hard in humid, low air -------
-    const gPull = clamp((Math.abs(s.gLoad) - 1.9) / 1.6, 0, 1);
-    const humid = 1 - smoothstep(400, 1600, s.altitude);
-    const vapour = gPull * humid * smoothstep(28, 45, s.airspeed);
-    this.vapourTimer += dt * vapour * 90;
+    // A fighter reaches the load factor that makes vortices visible far more often, and
+    // its tips trail a tight, persistent core rather than a wisp.
+    const gPull = jet
+      ? clamp((Math.abs(s.gLoad) - 2.6) / 3.0, 0, 1)
+      : clamp((Math.abs(s.gLoad) - 1.9) / 1.6, 0, 1);
+    const humid = 1 - smoothstep(jet ? 2200 : 400, jet ? 6000 : 1600, s.altitude);
+    const vapour = gPull * humid * smoothstep(28, 45, s.airspeed) * (jet ? 1.6 : 1);
+    this.vapourTimer += dt * vapour * (jet ? 150 : 90);
     while (this.vapourTimer >= 1) {
       this.vapourTimer -= 1;
-      for (const key of ['Wingtip_L', 'Wingtip_R']) {
+      const tips = jet ? ['Wingtip_L', 'Wingtip_R', 'LERX_L', 'LERX_R'] : ['Wingtip_L', 'Wingtip_R'];
+      for (const key of tips) {
         const l = locators[key];
         if (!l) continue;
         const p = _v1.copy(l).applyQuaternion(aircraftQuat).add(aircraftPos);
@@ -151,8 +162,32 @@ export class Particles extends THREE.Points {
       }
     }
 
+    // ---- contrails: cold, thin air behind the nozzles ------------------------------
+    if (jet) {
+      // Needs cold air and enough mass flow; below the tropopause on a warm day there
+      // is nothing to see, which is why they only appear once you have climbed.
+      const cold = smoothstep(3200, 5200, s.altitude);
+      const flow = clamp(s.throttle * 1.3 - 0.25, 0, 1);
+      const rate = cold * flow * 120;
+      this.exhaustTimer += dt * rate;
+      const exits = ['Nozzle_Exit_L', 'Nozzle_Exit_R'];
+      while (this.exhaustTimer >= 1) {
+        this.exhaustTimer -= 1;
+        const l = locators[exits[(Math.random() * exits.length) | 0]];
+        if (!l) break;
+        const p = _v1.copy(l).applyQuaternion(aircraftQuat).add(aircraftPos);
+        const back = _v2.set(0, 0, -1).applyQuaternion(aircraftQuat);
+        this.spawn(p.x, p.y, p.z,
+          back.x * 14 + (Math.random() - 0.5) * 2.0,
+          back.y * 14 + (Math.random() - 0.5) * 1.4,
+          back.z * 14 + (Math.random() - 0.5) * 2.0,
+          // Long-lived and slowly spreading, so the trail persists behind the aircraft.
+          7.0 + Math.random() * 5.0, 1.6 + Math.random() * 1.2, 0, 0.96, 0.97, 1.0);
+      }
+    }
+
     // ---- exhaust: visible when the throttle is opened, thins out in the cruise ------
-    const ex = locators.Exhaust;
+    const ex = jet ? null : locators.Exhaust;
     if (ex) {
       const rich = clamp(s.throttle * 1.25 - 0.35, 0, 1) * (0.35 + 0.65 * (1 - smoothstep(10, 45, s.airspeed)));
       this.exhaustTimer += dt * rich * 55;
@@ -169,7 +204,7 @@ export class Particles extends THREE.Points {
     }
 
     // ---- ground dust and tyre smoke -----------------------------------------------
-    if (s.onGround && s.groundSpeed > 1.2) {
+    if (s.onGround && s.groundSpeed > 1.2 && !jet) {
       const onGrass = 1;
       const rate = clamp(s.groundSpeed / 14, 0, 1) * 34 * onGrass;
       this.dustTimer += dt * rate;
@@ -227,7 +262,7 @@ export class Particles extends THREE.Points {
           -velocity.x * 0.16 + (Math.random() - 0.5) * 3.5,
           0.8 + Math.random() * 2.2,
           -velocity.z * 0.16 + (Math.random() - 0.5) * 3.5,
-          1.1 + Math.random() * 0.9, 0.45 + Math.random() * 0.35, 2, 0.42, 0.40, 0.38);
+          1.1 + Math.random() * 0.9, 0.26 + Math.random() * 0.22, 2, 0.42, 0.40, 0.38);
       }
     }
   }

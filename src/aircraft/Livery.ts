@@ -333,3 +333,283 @@ float vTrimRough; float vTrimHeight;`)
         }`);
   };
 }
+
+// ---------------------------------------------------------------------------
+// MiG-29 · Forces aériennes russes
+//
+// Same idea as the Cessna's paint, evaluated in the aircraft's own frame: a two-tone
+// blue-grey camouflage whose patches are noise rather than a decal, red stars drawn as
+// a signed-distance star so they stay sharp at any distance, a red bort number
+// projected on both flanks, and — the detail that makes a Fulcrum read as a Fulcrum —
+// the rainbow of thermal oxide on the bare metal around the nozzles, with soot streaked
+// back over the tail booms.
+//
+// Model frame: +Z nose, +Y up, +X LEFT wing. Nose z ~ +8.6, nozzles z ~ -8.7,
+// fins around x = +-1.7, wings spanning x = +-5.7.
+// ---------------------------------------------------------------------------
+
+const MIG_GLSL = /* glsl */ `
+// Distance to a five-pointed star of outer radius 1 centred at the origin, in the
+// plane (a, b). Negative inside. Drawn rather than textured so it stays crisp.
+float starShape(vec2 p, float r) {
+  const float PI5 = 0.62831853;             // 2*pi/10
+  float a = atan(p.x, p.y);
+  float seg = mod(a + PI5, 2.0 * PI5) - PI5;
+  float d = length(p) * cos(seg) / cos(PI5 * 0.5);
+  // Inner radius of a regular five-pointed star.
+  return d - r * 0.382;
+}
+float starMask(vec2 p, float r) {
+  // Union of the pentagon and its five points, approximated by the polar form.
+  const float PI5 = 0.62831853;
+  float a = atan(p.x, p.y);
+  float k = mod(a, 2.0 * PI5) - PI5;
+  float rr = length(p);
+  float edge = r * 0.382 / max(cos(k), 0.2);
+  return 1.0 - smoothstep(edge - r * 0.02, edge + r * 0.02, rr);
+}
+`;
+
+const MIG_BODY = /* glsl */ `
+{
+  vec3 P = vRootPos;
+  vec3 N = normalize(vRootNormal);
+  float ax = abs(P.x);
+  float sideSign = P.x >= 0.0 ? 1.0 : -1.0;
+
+  // ---- two-tone camouflage ----------------------------------------------
+  vec3 light = vec3(0.243, 0.290, 0.316);   // pale blue-grey
+  vec3 dark  = vec3(0.128, 0.157, 0.155);   // grey-green
+  vec3 pale  = vec3(0.330, 0.372, 0.392);   // the lightest of the three tones
+  float blob = fbm3(P * vec3(0.075, 0.14, 0.055));
+  float blob2 = fbm3(P * vec3(0.20, 0.26, 0.15) + 11.0);
+  float camo = smoothstep(0.44, 0.56, blob + 0.18 * (blob2 - 0.5));
+  vec3 col = mix(dark, light, camo);
+  // The upper surfaces of a Fulcrum are noticeably paler than its flanks.
+  col = mix(col, pale, smoothstep(0.25, 0.85, N.y) * (0.35 + 0.35 * camo));
+  // Underside is near-uniform light grey.
+  col = mix(col, pale * 1.05, smoothstep(-0.2, -0.75, N.y) * 0.85);
+
+  // ---- markings -----------------------------------------------------------
+  // Red star on the outer face of each fin.
+  float onFin = smoothstep(1.25, 1.55, ax) * smoothstep(-4.4, -5.0, P.z)
+              * (1.0 - smoothstep(-8.4, -9.0, P.z)) * smoothstep(1.1, 1.5, P.y) * step(0.55, abs(N.x));
+  if (onFin > 0.01) {
+    vec2 sp = vec2((P.z + 6.55) * sideSign, P.y - 2.55);
+    float star = starMask(sp * 1.0, 0.62);
+    col = mix(col, vec3(0.42, 0.030, 0.030), star * onFin * 0.95);
+  }
+  // Red star on the upper wing surface, outboard.
+  float onWingTop = smoothstep(2.4, 3.0, ax) * (1.0 - smoothstep(5.0, 5.5, ax))
+                  * smoothstep(0.55, 0.85, N.y) * (1.0 - smoothstep(-1.4, -2.2, P.z));
+  if (onWingTop > 0.01) {
+    vec2 wp = vec2((ax - 3.9), (P.z + 0.55) * sideSign);
+    col = mix(col, vec3(0.42, 0.030, 0.030), starMask(wp, 0.60) * onWingTop * 0.9);
+  }
+  // Bort number on both flanks of the forward fuselage, projected planar and flipped
+  // so it reads the right way round from either side.
+  float regU = (sideSign > 0.0 ? -P.z : P.z);
+  vec2 regUv = vec2((regU + 1.30) / 2.60, (P.y + 0.05) / 1.10);
+  float onNose = smoothstep(0.30, 0.55, ax) * (1.0 - smoothstep(1.35, 1.7, ax)) * step(0.45, abs(N.x));
+  if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0 && onNose > 0.5) {
+    float ink = texture2D(uRegMap, vec2(regUv.x, 1.0 - regUv.y)).a;
+    col = mix(col, vec3(0.46, 0.035, 0.035), ink * 0.94);
+  }
+
+  // ---- construction detail ------------------------------------------------
+  float frames = seamMask(P.z + 0.2, 0.86, 0.006);
+  float stringers = seamMask(P.y, 0.62, 0.005) * (1.0 - smoothstep(0.5, 0.9, abs(N.y)));
+  float ribs = seamMask(P.x, 0.74, 0.006) * smoothstep(0.45, 0.8, abs(N.y));
+  float panelLine = clamp(frames + stringers + ribs, 0.0, 1.0);
+  float rivets = clamp(frames * dotMask(P.y, 0.085, 0.010)
+                     + ribs * dotMask(P.z, 0.085, 0.010), 0.0, 1.0);
+
+  // ---- wear ---------------------------------------------------------------
+  float grime = fbm3(P * 1.7);
+  // Exhaust soot: the reference photographs show it streaked forward-to-aft across the
+  // inner faces of both fins and along the tail booms.
+  float sootZone = smoothstep(-3.2, -6.0, P.z) * (0.35 + 0.85 * fbm3(P * vec3(0.6, 2.4, 0.35)));
+  float soot = clamp(sootZone * smoothstep(2.4, 0.6, ax) * 0.9, 0.0, 1.0);
+  // Walkway scuffing on the LERX where the ground crew climb aboard.
+  float walkway = smoothstep(0.4, 0.75, N.y) * (1.0 - smoothstep(1.6, 2.1, ax))
+                * smoothstep(-0.5, 1.6, P.z) * (1.0 - smoothstep(3.6, 4.4, P.z));
+  float leadEdge = smoothstep(0.55, 0.85, abs(N.z)) * step(0.0, P.z) * (0.3 + 0.8 * fbm3(P * 6.0));
+
+  col = mix(col, vec3(0.045, 0.043, 0.041), soot * 0.55);
+  col = mix(col, col * vec3(0.86, 0.86, 0.84), walkway * 0.45 * grime);
+  col *= 0.93 + 0.14 * grime;
+  col -= panelLine * 0.030;
+  col += rivets * 0.014;
+
+  diffuseColor.rgb = col;
+
+  // Matte military paint, rougher where it is scuffed or sooty.
+  vLiveryRough = clamp(0.55 + 0.22 * soot + 0.14 * walkway + 0.08 * grime + panelLine * 0.10, 0.05, 1.0);
+  vLiveryMetal = clamp(leadEdge * 0.22, 0.0, 1.0);
+  float peel = (fbm3(P * 34.0) - 0.5) * 0.00035;
+  vLiveryHeight = peel - panelLine * 0.0022 + rivets * 0.0011;
+}
+`;
+
+/** Camouflage, stars and bort number for the fighter. */
+export function applyMigLivery(material: THREE.MeshStandardMaterial, bort = '042'): THREE.MeshPhysicalMaterial {
+  const reg = makeBortTexture(bort);
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, roughness: 0.58, metalness: 0.0,
+    // Military paint is matte: a thin, rough clearcoat, nothing like a light aircraft's.
+    clearcoat: 0.18, clearcoatRoughness: 0.55,
+    envMapIntensity: 1.0,
+  });
+  mat.name = material.name;
+  (mat as any)._apKey = 'migLivery';
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.call(mat, shader, renderer);
+    shader.uniforms.uRootInverse = rootInverse;
+    shader.uniforms.uRegMap = { value: reg };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nuniform mat4 uRootInverse;\n${LIVERY_GLSL}`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        {
+          vec4 wp = modelMatrix * vec4(transformed, 1.0);
+          vRootPos = (uRootInverse * wp).xyz;
+          vRootNormal = normalize(mat3(uRootInverse) * (mat3(modelMatrix) * objectNormal));
+        }`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D uRegMap;
+        ${LIVERY_GLSL}
+        ${MIG_GLSL}
+        float vLiveryRough; float vLiveryMetal; float vLiveryHeight;
+        vec3 perturbFromHeight(vec3 n, vec3 viewPos, float h, float strength) {
+          vec3 dpx = dFdx(viewPos), dpy = dFdy(viewPos);
+          float dhx = dFdx(h), dhy = dFdy(h);
+          vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
+          float det = dot(dpx, r1);
+          vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+          return normalize(abs(det) * n - strength * grad);
+        }`)
+      .replace('#include <map_fragment>', MIG_BODY)
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vLiveryRough;')
+      .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = max(metalness, vLiveryMetal);')
+      .replace('#include <normal_fragment_maps>', 'normal = perturbFromHeight(normal, -vViewPosition, vLiveryHeight, 1.0);');
+  };
+  material.dispose();
+  return mat;
+}
+
+/**
+ * Bare metal around the nozzles. Titanium and steel that have been through reheat carry
+ * an oxide film whose thickness varies with how hot that patch ran, and thin-film
+ * interference turns thickness into colour — the straw-gold, violet and blue banding
+ * visible in every photograph of a Fulcrum's tail.
+ */
+export function applyThermalMetal(material: THREE.MeshStandardMaterial) {
+  material.map = null; material.normalMap = null; material.roughnessMap = null;
+  material.color.setHex(0xffffff);
+  material.metalness = 1.0;
+  material.roughness = 0.34;
+  const prev = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prev?.call(material, shader, renderer);
+    shader.uniforms.uRootInverse = rootInverse;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nuniform mat4 uRootInverse;\n${LIVERY_GLSL}`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vRootPos = (uRootInverse * (modelMatrix * vec4(transformed, 1.0))).xyz;
+        vRootNormal = normalize(mat3(uRootInverse) * (mat3(modelMatrix) * objectNormal));`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${LIVERY_GLSL}\nfloat vTmRough;`)
+      .replace('#include <map_fragment>', `
+        {
+          vec3 P = vRootPos;
+          // Oxide thickness: hottest at the throat, banded by the petal seams, with
+          // some blotching from repeated heat cycles.
+          float aft = smoothstep(-6.4, -9.2, P.z);
+          float band = fbm3(P * vec3(0.5, 0.5, 3.2)) * 0.6 + fbm3(P * 9.0) * 0.4;
+          float thick = clamp(aft * (0.35 + 1.15 * band), 0.0, 1.0);
+          // Thin-film interference, approximated: straw -> violet -> blue -> grey.
+          vec3 c0 = vec3(0.62, 0.60, 0.58);
+          vec3 c1 = vec3(0.72, 0.58, 0.24);
+          vec3 c2 = vec3(0.44, 0.26, 0.42);
+          vec3 c3 = vec3(0.22, 0.30, 0.52);
+          vec3 tint = c0;
+          tint = mix(tint, c1, smoothstep(0.10, 0.42, thick));
+          tint = mix(tint, c2, smoothstep(0.38, 0.68, thick));
+          tint = mix(tint, c3, smoothstep(0.62, 0.92, thick));
+          // Soot dulls the very hottest area near the exit plane.
+          float soot = smoothstep(-8.2, -9.4, P.z) * (0.4 + 0.6 * fbm3(P * 5.0));
+          tint = mix(tint, vec3(0.055, 0.052, 0.050), soot * 0.6);
+          diffuseColor.rgb = tint;
+          vTmRough = clamp(0.22 + 0.45 * thick + 0.30 * soot, 0.08, 1.0);
+        }`)
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vTmRough;');
+  };
+}
+
+/**
+ * The fighter's canopy. A Fulcrum's is gold-tinted — a vapour-deposited film that
+ * reflects radar — so it reads warm and iridescent rather than blue.
+ */
+export function applyCanopy(material: THREE.MeshStandardMaterial, mesh: THREE.Mesh) {
+  material.transparent = true;
+  material.opacity = 0.42;
+  material.roughness = 0.045;
+  material.metalness = 0.32;
+  material.color.setHex(0xd8b471);
+  material.envMapIntensity = 2.2;
+  material.depthWrite = false;
+  material.side = THREE.DoubleSide;
+  mesh.castShadow = false;
+  mesh.renderOrder = 10;
+  const prev = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prev?.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCanopyView; varying vec2 vCanopyUv;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvCanopyUv = uv;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCanopyView = normalize(cameraPosition - (modelMatrix * vec4(transformed, 1.0)).xyz);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCanopyView; varying vec2 vCanopyUv;')
+      .replace('#include <map_fragment>', `
+        {
+          // Iridescence: the gold film shifts toward green then violet at grazing
+          // angles, the way a soap film does.
+          float f = 1.0 - abs(dot(normalize(vCanopyView), normalize(vNormal)));
+          vec3 a = vec3(0.85, 0.68, 0.34);
+          vec3 b = vec3(0.42, 0.72, 0.55);
+          vec3 c = vec3(0.55, 0.42, 0.82);
+          vec3 tint = mix(a, b, smoothstep(0.30, 0.72, f));
+          tint = mix(tint, c, smoothstep(0.70, 0.98, f));
+          diffuseColor.rgb *= tint;
+        }`)
+      .replace('#include <roughnessmap_fragment>', `
+        float roughnessFactor = roughness;
+        {
+          // Anisotropic polishing marks, drawn along the canopy's length.
+          vec2 g = vCanopyUv * vec2(220.0, 26.0);
+          float streak = smoothstep(0.982, 1.0, sin(g.x + sin(g.y * 0.7) * 3.0));
+          roughnessFactor = roughness + streak * 0.28;
+        }`);
+  };
+}
+
+/** Small canvas holding the bort number, projected on both flanks. */
+function makeBortTexture(text: string): THREE.CanvasTexture {
+  const w = 512, h = 216;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d')!;
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = '#000';
+  // Soviet bort numbers are drawn in a heavy, slightly condensed slab.
+  g.font = `700 ${Math.floor(h * 0.92)}px "Arial Narrow", Inter, Arial, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.setTransform(1.0, 0, -0.10, 1, 0, 0);   // slight forward lean, as painted
+  g.fillText(text, w / 2 + h * 0.05, h * 0.54);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.anisotropy = 8;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  return t;
+}

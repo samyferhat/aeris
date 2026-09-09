@@ -3,11 +3,13 @@ import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
 import { atmoUniforms } from '../sky/Atmosphere';
+import { HEAT_LAYER } from './Afterburner';
 import { makeCloudShapeTexture, makeCloudDetailTexture, makeWeatherTexture } from '../sky/CloudNoise';
 import cloudsFrag from '../shaders/clouds.frag.glsl?raw';
 import { fsVert, blurFrag, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag, lumFrag, downsampleFrag, adaptFrag, toneFrag } from '../shaders/post.glsl';
 
 const _v2 = new THREE.Vector2();
+const _c1 = new THREE.Color();
 
 /**
  * Custom HDR pipeline sharing one depth texture:
@@ -24,6 +26,8 @@ export class Pipeline {
   private aoRT2: THREE.WebGLRenderTarget;
   private godRT: THREE.WebGLRenderTarget;
   private godRT2: THREE.WebGLRenderTarget;
+  private heatRT!: THREE.WebGLRenderTarget;
+  private heatCamera = new THREE.PerspectiveCamera();
   private pingRT: THREE.WebGLRenderTarget;
   private pongRT: THREE.WebGLRenderTarget;
   private ldrRT: THREE.WebGLRenderTarget;
@@ -60,6 +64,10 @@ export class Pipeline {
   /** Debug: show an intermediate buffer instead of the final image. */
   debugView: 'clouds' | 'ao' | 'god' | 'depth' | null = null;
   private debugMat = new THREE.ShaderMaterial({ vertexShader: fsVert, fragmentShader: `precision highp float; uniform sampler2D tDiffuse; uniform int uMode; varying vec2 vUv; void main(){ vec4 c = texture2D(tDiffuse, vUv); if (uMode == 1) c = vec4(c.rgb + vec3(1.0 - c.a) * vec3(0.0, 0.0, 0.3), 1.0); if (uMode == 3) c = vec4(vec3(pow(c.x, 40.0)), 1.0); gl_FragColor = vec4(c.rgb, 1.0); }`, uniforms: { tDiffuse: { value: null }, uMode: { value: 0 } }, depthTest: false, depthWrite: false });
+  /** 0 = clear vision, 1 = greyed out. Driven by sustained g. */
+  tunnelVision = 0;
+  /** Set false for aircraft with no exhaust plume, to skip the pass entirely. */
+  heatHaze = false;
   // Public knobs
   cloudCoverage = 0.42;
   /** Live-tunable cloud density shaping (see clouds.frag.glsl). */
@@ -99,6 +107,8 @@ export class Pipeline {
     this.aoRT2 = this.aoRT.clone();
     this.godRT = new THREE.WebGLRenderTarget(size.x >> 2, size.y >> 2, { type: THREE.HalfFloatType, depthBuffer: false });
     this.godRT2 = this.godRT.clone();
+    // Exhaust distortion, quarter res: a shimmer has no high frequencies worth keeping.
+    this.heatRT = new THREE.WebGLRenderTarget(size.x >> 2, size.y >> 2, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
     this.ldrRT = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.UnsignedByteType, depthBuffer: false });
     this.ldrRT2 = this.ldrRT.clone();
 
@@ -122,11 +132,15 @@ export class Pipeline {
     this.compositeMat = mk(compositeFrag, {
       tScene: { value: this.sceneRT.texture }, tClouds: { value: this.cloudRT.texture }, tDepth: { value: this.depth }, tGod: { value: this.godRT.texture }, tAO: { value: this.aoRT.texture },
       uCloudTexel: { value: new THREE.Vector2(1 / (size.x >> 1), 1 / (size.y >> 1)) }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 }, uSunColor: { value: this.sunColor },
+      tHeat: { value: this.heatRT.texture }, uHeatStrength: { value: 0.06 },
       uGodStrength: { value: 0.6 }, uAOStrength: { value: 0.5 }, uFlareStrength: { value: 0.5 }, uAspect: { value: size.x / size.y }, uNear: { value: camera.near }, uFar: { value: camera.far },
     });
     this.motionMat = mk(motionBlurFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uInvViewProj: { value: new THREE.Matrix4() }, uPrevViewProj: { value: new THREE.Matrix4() }, uStrength: { value: 0.35 }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uNear: { value: camera.near }, uFar: { value: camera.far } });
     this.dofMat = mk(dofFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uFocus: { value: 55 }, uMaxCoc: { value: 3.0 }, uNear: { value: camera.near }, uFar: { value: camera.far } });
-    this.grainMat = mk(grainFrag, { tDiffuse: { value: null }, uTime: { value: 0 }, uAmount: { value: 0.045 }, uVignette: { value: 0.3 } });
+    this.grainMat = mk(grainFrag, {
+      tDiffuse: { value: null }, uTime: { value: 0 }, uAmount: { value: 0.045 }, uVignette: { value: 0.3 },
+      uTunnel: { value: 0 }, uAspect: { value: size.x / size.y },
+    });
     // Bloom runs at half resolution: it is a wide blur, so nothing is lost and the
     // five-level mip chain costs a quarter as much.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x >> 1, size.y >> 1), 0.22, 0.55, 1.15);
@@ -163,6 +177,8 @@ export class Pipeline {
     this.sceneRT.setSize(w, h); this.pingRT.setSize(w, h); this.pongRT.setSize(w, h); this.ldrRT.setSize(w, h); this.ldrRT2.setSize(w, h);
     this.cloudRT.setSize(w >> 1, h >> 1); this.cloudRT2.setSize(w >> 1, h >> 1); this.aoRT.setSize(w >> 1, h >> 1); this.aoRT2.setSize(w >> 1, h >> 1);
     this.godRT.setSize(w >> 2, h >> 2); this.godRT2.setSize(w >> 2, h >> 2);
+    this.heatRT.setSize(w >> 2, h >> 2);
+    this.grainMat.uniforms.uAspect.value = w / h;
     this.cloudMat.uniforms.uResolution.value.set(w >> 1, h >> 1);
     this.aoMat.uniforms.uTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
     this.compositeMat.uniforms.uCloudTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
@@ -257,6 +273,22 @@ export class Pipeline {
     this.blurMat.uniforms.tDiffuse.value = this.cloudRT2.texture;
     this.blurMat.uniforms.uTexel.value.set(1 / (this.w >> 1), 1 / (this.h >> 1));
     this.blit(this.blurMat, this.cloudRT);
+    // 2b. exhaust heat haze — a layer-masked render of just the distortion cones
+    if (this.heatHaze) {
+      this.heatCamera.copy(cam);
+      this.heatCamera.layers.set(HEAT_LAYER);
+      const prevClear = r.getClearColor(_c1).clone();
+      const prevAlpha = r.getClearAlpha();
+      r.setClearColor(0x000000, 0);
+      r.setRenderTarget(this.heatRT);
+      r.clear(true, false, false);
+      r.render(this.scene, this.heatCamera);
+      r.setClearColor(prevClear, prevAlpha);
+    } else {
+      r.setRenderTarget(this.heatRT);
+      r.setClearColor(0x000000, 0);
+      r.clear(true, false, false);
+    }
     // 3. god rays
     this.godMaskMat.uniforms.uSunVisible.value = this.sunVisible;
     this.blit(this.godMaskMat, this.godRT2);
@@ -320,7 +352,9 @@ export class Pipeline {
     this.fxaa.render(r, this.ldrRT2, this.ldrRT, dt, false);
     // 12. grain + vignette, straight to the canvas (also the upscale when the adaptive
     // resolution has the internal buffers smaller than the drawing buffer)
-    this.grainMat.uniforms.tDiffuse.value = this.ldrRT2.texture; this.grainMat.uniforms.uTime.value = this.time;
+    this.grainMat.uniforms.tDiffuse.value = this.ldrRT2.texture;
+    this.grainMat.uniforms.uTime.value = this.time;
+    this.grainMat.uniforms.uTunnel.value = this.tunnelVision;
     if (this.debugView) {
       const map = { clouds: [this.cloudRT.texture, 1], ao: [this.aoRT2.texture, 0], god: [this.godRT.texture, 0], depth: [this.depth, 3] } as const;
       const [tex, mode] = map[this.debugView];

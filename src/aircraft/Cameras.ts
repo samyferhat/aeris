@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FlightModel } from './FlightModel';
+import { AircraftConfig, CESSNA } from './AircraftConfig';
 import { clamp, lerp } from '../core/Noise';
 
 export type CameraMode = 'chase' | 'cockpit' | 'orbit';
@@ -28,8 +29,16 @@ export class CameraRig {
   /** The aircraft's nose is +Z, a Three.js camera looks down -Z: hence the half turn. */
   private static readonly NOSE_TO_VIEW = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
+  config: AircraftConfig = CESSNA;
+
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 60000);
+  }
+
+  setConfig(config: AircraftConfig) {
+    this.config = config;
+    this.initialised = false;
+    this.orbit.dist = Math.max(12, config.chaseDistance * 1.2);
   }
 
   next() {
@@ -41,10 +50,13 @@ export class CameraRig {
   update(dt: number, fm: FlightModel, orbitDelta: { x: number; y: number; zoom: number }, turbulence: number) {
     this.t += dt;
     const s = fm.state;
-    const speedN = clamp(s.airspeed / 70, 0, 1.4);
+    const cfg = this.config;
+    const speedN = clamp(s.airspeed / cfg.refSpeed, 0, 1.4);
     // Continuous shake: airspeed + turbulence + stall buffet + rolling on the ground
     const groundRumble = s.onGround ? clamp(s.groundSpeed / 30, 0, 1) * (fm.onRunway(fm.position.x, fm.position.z) ? 0.25 : 0.9) : 0;
-    const base = 0.0035 * speedN * speedN + 0.012 * turbulence + 0.02 * s.stall + 0.012 * groundRumble;
+    // Reheat shakes the airframe; so does the buffet at the edge of the envelope.
+    const base = 0.0035 * speedN * speedN + 0.012 * turbulence + 0.02 * s.stall
+      + 0.012 * groundRumble + 0.010 * s.afterburner + 0.03 * s.overG;
     this.shake = Math.max(base, this.shake * Math.exp(-dt * 4));
     const n1 = Math.sin(this.t * 37.1) * Math.sin(this.t * 11.3 + 1.7), n2 = Math.sin(this.t * 29.7 + 0.5) * Math.cos(this.t * 8.1), n3 = Math.sin(this.t * 43.3 + 2.1);
     this.shakeVec.set(n1, n2, n3).multiplyScalar(this.shake);
@@ -66,9 +78,10 @@ export class CameraRig {
       // slight view shake rotation
       this.tmpQ.setFromEuler(new THREE.Euler(this.shakeVec.x * 0.012, this.shakeVec.y * 0.012, this.shakeVec.z * 0.008));
       cam.quaternion.multiply(this.tmpQ);
-      cam.fov = lerp(cam.fov, 68, 0.1);
+      cam.fov = lerp(cam.fov, 68 + 6 * s.afterburner, 0.1);
     } else if (this.mode === 'chase') {
-      const dist = 14 + 4 * speedN, height = 4.2 + 1.2 * speedN;
+      const dist = cfg.chaseDistance * (1 + 0.28 * speedN);
+      const height = cfg.chaseHeight * (1 + 0.28 * speedN);
       // Target: behind & above, using a horizon-stabilised up so the camera does not roll fully with the aircraft
       const flatFwd = new THREE.Vector3(fwd.x, fwd.y * 0.35, fwd.z).normalize();
       const target = pos.clone().addScaledVector(flatFwd, -dist).addScaledVector(new THREE.Vector3(0, 1, 0), height);
@@ -79,10 +92,14 @@ export class CameraRig {
       const desiredUp = new THREE.Vector3(0, 1, 0).lerp(up, 0.35).normalize();
       this.chaseUp.lerp(desiredUp, 1 - Math.exp(-dt * 2)).normalize();
       cam.position.copy(this.chasePos).add(this.shakeVec.clone().multiplyScalar(0.6));
-      this.lookTarget.lerp(pos.clone().addScaledVector(fwd, 12 + 30 * speedN).addScaledVector(fm.velocity, 0.15), 1 - Math.exp(-dt * 5));
+      this.lookTarget.lerp(pos.clone().addScaledVector(fwd, cfg.chaseDistance * (0.85 + 2.1 * speedN)).addScaledVector(fm.velocity, 0.15), 1 - Math.exp(-dt * 5));
       cam.up.copy(this.chaseUp);
       cam.lookAt(this.lookTarget);
-      cam.fov = lerp(cam.fov, 55 + 18 * speedN * speedN, 1 - Math.exp(-dt * 2));
+      // Field of view opens with speed, and again when the reheat lights — the visual
+      // shorthand for acceleration that every fast game uses, kept subtle enough to
+      // feel like pressure rather than a zoom.
+      const fov = cfg.fovBase + cfg.fovSpeed * speedN * speedN + 9 * s.afterburner;
+      cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-dt * 2));
     } else {
       this.orbit.theta -= orbitDelta.x * 0.005;
       this.orbit.phi = clamp(this.orbit.phi - orbitDelta.y * 0.005, 0.15, Math.PI - 0.2);

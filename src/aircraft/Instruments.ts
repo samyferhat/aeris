@@ -38,8 +38,9 @@ export class Instruments {
     this.texture.minFilter = THREE.LinearMipmapLinearFilter;
     this.texture.generateMipmaps = true;
     this.draw({
-      airspeed: 0, groundSpeed: 0, alpha: 0, beta: 0, gLoad: 1, altitude: 0, heightAGL: 0, heading: 0,
-      pitch: 0, bank: 0, verticalSpeed: 0, rpm: 0, onGround: true, stall: 0, throttle: 0, flaps: 0,
+      airspeed: 0, indicatedSpeed: 0, mach: 0, groundSpeed: 0, alpha: 0, beta: 0, gLoad: 1,
+      altitude: 0, heightAGL: 0, heading: 0, pitch: 0, bank: 0, verticalSpeed: 0, rpm: 0,
+      onGround: true, stall: 0, throttle: 0, flaps: 0, afterburner: 0, gear: 1, overG: 0,
       wheelCompression: [], wheelOnGround: [], wheelSlip: 0,
     }, 1);
   }

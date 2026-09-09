@@ -94,13 +94,18 @@ void main(){
 export const compositeFrag = /* glsl */ `
 precision highp float;
 uniform sampler2D tScene; uniform sampler2D tClouds; uniform sampler2D tDepth; uniform sampler2D tGod; uniform sampler2D tAO;
+uniform sampler2D tHeat; uniform float uHeatStrength;
 uniform vec2 uCloudTexel; uniform vec2 uSunScreen; uniform float uSunVisible; uniform vec3 uSunColor; uniform float uGodStrength;
 uniform float uAOStrength; uniform float uFlareStrength; uniform float uAspect; uniform float uNear; uniform float uFar;
 varying vec2 vUv;
 float linearDepth(float z) { float ndc = z * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear)); }
 void main(){
-  vec4 scene = texture2D(tScene, vUv);
-  float zc = texture2D(tDepth, vUv).x; float dc = linearDepth(zc);
+  // Heat haze: the exhaust buffer carries a screen-space offset, so everything seen
+  // through the plume is sampled from slightly the wrong place.
+  vec4 heat = texture2D(tHeat, vUv);
+  vec2 uv = vUv + heat.rg * uHeatStrength;
+  vec4 scene = texture2D(tScene, uv);
+  float zc = texture2D(tDepth, uv).x; float dc = linearDepth(zc);
   // depth-aware upsample of the half-res cloud buffer
   vec2 base = (floor(vUv / uCloudTexel - 0.5) + 0.5) * uCloudTexel;
   vec4 acc = vec4(0.0); float wsum = 0.0;
@@ -175,7 +180,8 @@ void main(){
 
 export const grainFrag = /* glsl */ `
 precision highp float;
-uniform sampler2D tDiffuse; uniform float uTime; uniform float uAmount; uniform float uVignette; varying vec2 vUv;
+uniform sampler2D tDiffuse; uniform float uTime; uniform float uAmount; uniform float uVignette;
+uniform float uTunnel; uniform float uAspect; varying vec2 vUv;
 float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main(){
   vec4 c = texture2D(tDiffuse, vUv);
@@ -184,6 +190,18 @@ void main(){
   c.rgb += g * uAmount * (1.0 - lum * 0.6);
   vec2 d = vUv - 0.5; float v = 1.0 - dot(d, d) * uVignette * 2.2;
   c.rgb *= smoothstep(0.0, 1.0, v);
+  // Grey-out under sustained g: peripheral vision goes first and desaturates before it
+  // goes dark, which is what pilots describe and what makes it read as physiological
+  // rather than as a lens effect.
+  if (uTunnel > 0.001) {
+    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+    float radius = mix(0.95, 0.16, uTunnel);
+    float edge = smoothstep(radius * 0.55, radius * 1.35, length(p));
+    float loss = clamp(edge * uTunnel, 0.0, 1.0);
+    float grey = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    c.rgb = mix(c.rgb, vec3(grey), loss * 0.85);
+    c.rgb *= 1.0 - loss * 0.94;
+  }
   gl_FragColor = c; }`;
 
 
