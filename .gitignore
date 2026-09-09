@@ -1,5 +1,12 @@
 node_modules
 dist
 .DS_Store
+
+# Blender working files. The modelling scripts are the source of truth for the
+# aircraft; the .blend, the bake cache and the reference renders are derived from
+# them and are large, so they stay out of the repository.
+blender/*.blend
 blender/*.blend1
-blender/*.png
+blender/__pycache__/
+blender/textures/
+blender/shots/

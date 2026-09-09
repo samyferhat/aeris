@@ -1,4 +1,5 @@
-import bpy, numpy as np, os, math
+import numpy as np, os, math
+from PIL import Image
 OUT = '/Users/samy/Documents/dev/code/aeris/blender/textures'
 SIZE = int(globals().get('BAKE_SIZE', 2048))
 d = np.load(os.path.join(OUT, 'bake_%d.npz' % SIZE))
@@ -92,9 +93,9 @@ band |= is_wing & (ax > 5.02) & (ax < 5.32)
 red |= is_wing & (ax > 4.92) & (ax < 4.98)
 alb[band] = BLUE; alb[red] = RED
 # registration text
-reg_img = bpy.data.images.load(os.path.join(OUT, 'reg_mask.png'), check_existing=True)
-RW, RH = reg_img.size
-ra = np.empty(RW * RH * 4, np.float32); reg_img.pixels.foreach_get(ra); ra = ra.reshape(RH, RW, 4)[..., 0]
+_ri = Image.open(os.path.join(OUT, 'reg_mask.png')).convert('L')
+RW, RH = _ri.size
+ra = np.asarray(_ri).astype(np.float32)[::-1] / 255.0
 def sample_mask(u, v, valid):
     uu = np.clip(u, 0, 1) * (RW - 1); vv = np.clip(v, 0, 1) * (RH - 1)
     i0 = np.floor(uu).astype(int); j0 = np.floor(vv).astype(int); fu = uu - i0; fv = vv - j0
@@ -126,16 +127,16 @@ rough = np.where(band, rough - 0.04, rough)
 rough = np.clip(rough, 0.05, 0.95)
 orm = np.stack([ao, rough, np.zeros_like(rough)], axis=-1); orm[~cov] = (1.0, 0.36, 0.0)
 
-def save_img(name, arr, noncolor, fmt='PNG'):
-    old = bpy.data.images.get(name)
-    if old: bpy.data.images.remove(old)
-    H, Wd = arr.shape[:2]
-    img = bpy.data.images.new(name, Wd, H, alpha=False)
-    rgba = np.concatenate([arr.astype(np.float32), np.ones((H, Wd, 1), np.float32)], axis=-1)
-    img.pixels.foreach_set(rgba.ravel())
-    img.colorspace_settings.name = 'Non-Color' if noncolor else 'sRGB'
-    img.filepath_raw = os.path.join(OUT, name + ('.png' if fmt == 'PNG' else '.jpg')); img.file_format = fmt
-    img.save(); return img
+def to_srgb(lin):
+    a = np.clip(lin, 0, 1)
+    return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(a, 1/2.4) - 0.055)
+def save_img(name, arr, noncolor, encode_srgb=False):
+    a = np.clip(arr, 0, 1)
+    if encode_srgb: a = to_srgb(a)
+    # Blender image space is bottom-up; PNG is top-down
+    im = Image.fromarray((a[::-1] * 255 + 0.5).astype(np.uint8), 'RGB')
+    im.save(os.path.join(OUT, name + '.png'))
+    return im
 save_img('body_albedo', alb, False)
 save_img('body_normal', normal_rgb, True)
 save_img('body_orm', orm, True)
