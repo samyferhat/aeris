@@ -81,14 +81,18 @@ src/
   world/      Heightfield · Erosion hydraulique · Terrain (chunks LOD) · Vegetation · Foliage · Runway
   water/      Ocean (Gerstner, écume, profondeur)
   sky/        Atmosphere (Rayleigh/Mie) · AerialPerspective · Environment (IBL dynamique) · CloudNoise
-  aircraft/   FlightModel · Aircraft (animation) · Livery (peinture procédurale) · Instruments · Cameras
-  fx/         Pipeline (post-traitement complet) · Particles
-  audio/      Audio (moteur, vent, Doppler, réverbération)
-  ui/         HUD · TimeSlider
+  aircraft/   AircraftConfig (tout ce qui distingue les deux appareils) · FlightModel
+              Aircraft (animation des gouvernes, du train, des tuyères) · Cameras
+              Livery (peintures procédurales : Cessna, camouflage MiG, métal thermique, verrières)
+              Instruments · InstrumentsSoviet (cadrans cyrilliques) · HeadUpDisplay
+  fx/         Pipeline (post-traitement complet) · Particles · Afterburner · JetEffects
+  audio/      Audio (piston ou turbine, vent, Doppler, réverbération, bang supersonique)
+  ui/         HUD · TimeSlider · Selection (écran de choix)
   shaders/    atmosphere · sky · terrain · ocean · clouds · post
 tools/        fetch-assets.py (télécharge et empaquette) · shrink-glb.py · blender_rpc.py
               vite-screenshot-plugin.ts (capture de référence, serveur de dev uniquement)
-blender/      Scripts de modélisation de l'avion, pilotés via le serveur MCP de Blender
+blender/      Scripts de modélisation du Cessna, pilotés via le serveur MCP de Blender
+blender/mig/  Idem pour le MiG-29
 public/       Textures CC0, HDRI, cessna.glb
 ```
 

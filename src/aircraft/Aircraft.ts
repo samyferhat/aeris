@@ -293,11 +293,13 @@ export class Aircraft extends THREE.Group {
     const brakeOut = clamp((0.22 - fm.state.throttle) * 5, 0, 1) * clamp((fm.state.airspeed - 60) / 60, 0, 1);
     this.airbrake = lerp(this.airbrake, fm.state.onGround && fm.state.groundSpeed > 20 ? 1 : brakeOut, 1 - Math.exp(-dt * 2.5));
     set('Airbrake', X, deg(45) * this.airbrake);
-    // Nozzles: convergent at idle, wide open in reheat.
-    const nozzleOpen = 0.35 + 0.65 * clamp(fm.power * 1.1 - 0.05, 0, 1) + 0.5 * fm.state.afterburner;
+    // Nozzles: the petals close to a convergent throat at idle and swing wide open in
+    // reheat. Only the radius moves — scaling the length as well would slide the whole
+    // assembly out of the tail.
+    const nozzleOpen = clamp(0.30 + 0.55 * clamp(fm.power * 1.1 - 0.05, 0, 1) + 0.45 * fm.state.afterburner, 0, 1.3);
     for (const n of ['Nozzle_L', 'Nozzle_R']) {
-      const part = this.parts[n], rest = this.rest[n];
-      if (part && rest) part.scale.setScalar(0.88 + 0.20 * nozzleOpen);
+      const part = this.parts[n];
+      if (part) { const r = 0.86 + 0.22 * nozzleOpen; part.scale.set(r, r, 1); }
     }
     // Stick and throttle move with the inputs, visible from the pilot's seat.
     const stick = this.parts['Stick'], stickRest = this.rest['Stick'];
