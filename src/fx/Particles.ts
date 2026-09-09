@@ -54,7 +54,9 @@ export class Particles extends THREE.Points {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           // Puffs expand as they age; vapour expands least, dust the most.
           float grow = mix(1.0, aData.w < 0.5 ? 2.4 : (aData.w < 1.5 ? 4.0 : 5.5), t);
-          gl_PointSize = aData.z * grow * uPixelScale / max(-mv.z, 1.0);
+          // aData.z is a diameter in metres; uPixelScale converts metres at one metre of
+          // depth into pixels, so the puff keeps a physical size instead of a screen one.
+          gl_PointSize = clamp(aData.z * grow * uPixelScale / max(-mv.z, 1.0), 1.0, 420.0);
           // Fade in quickly, out slowly; vapour also thins as it stretches.
           vAlpha = smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.35, 1.0, t));
           vCol = color;
@@ -145,7 +147,7 @@ export class Particles extends THREE.Points {
           -velocity.x * 0.06 + (Math.random() - 0.5) * 1.2,
           -velocity.y * 0.06 + (Math.random() - 0.5) * 0.8,
           -velocity.z * 0.06 + (Math.random() - 0.5) * 1.2,
-          0.55 + Math.random() * 0.5, 26 + Math.random() * 14, 0, 0.95, 0.97, 1.0);
+          0.55 + Math.random() * 0.5, 0.30 + Math.random() * 0.20, 0, 0.95, 0.97, 1.0);
       }
     }
 
@@ -162,7 +164,7 @@ export class Particles extends THREE.Points {
           velocity.x * 0.35 + back.x * 6 + (Math.random() - 0.5) * 1.2,
           velocity.y * 0.35 + back.y * 6 + 0.8 + Math.random() * 0.6,
           velocity.z * 0.35 + back.z * 6 + (Math.random() - 0.5) * 1.2,
-          0.8 + Math.random() * 0.7, 16 + Math.random() * 12, 1, 0.30, 0.29, 0.28);
+          0.8 + Math.random() * 0.7, 0.22 + Math.random() * 0.18, 1, 0.30, 0.29, 0.28);
       }
     }
 
@@ -182,7 +184,7 @@ export class Particles extends THREE.Points {
           -velocity.x * 0.10 + (Math.random() - 0.5) * 1.6,
           0.5 + Math.random() * 1.1,
           -velocity.z * 0.10 + (Math.random() - 0.5) * 1.6,
-          0.9 + Math.random() * 0.8, 18 + Math.random() * 16, 2, 0.62, 0.57, 0.47);
+          0.9 + Math.random() * 0.8, 0.35 + Math.random() * 0.30, 2, 0.62, 0.57, 0.47);
       }
     }
 
@@ -210,8 +212,7 @@ export class Particles extends THREE.Points {
     dataAttr.needsUpdate = true;
     this.colorAttr.needsUpdate = true;
     this.geometry.setDrawRange(0, MAX);
-    // Particles are lit approximately: brighter facing the sun, dimmer at night.
-    (this.mat as THREE.ShaderMaterial).uniforms.uPixelScale.value = pixelScale * (1 - night * 0.4);
+
   }
 
   /** Burst of rubber smoke at the wheels on a firm touchdown. */
@@ -226,7 +227,7 @@ export class Particles extends THREE.Points {
           -velocity.x * 0.16 + (Math.random() - 0.5) * 3.5,
           0.8 + Math.random() * 2.2,
           -velocity.z * 0.16 + (Math.random() - 0.5) * 3.5,
-          1.1 + Math.random() * 0.9, 22 + Math.random() * 20, 2, 0.42, 0.40, 0.38);
+          1.1 + Math.random() * 0.9, 0.45 + Math.random() * 0.35, 2, 0.42, 0.40, 0.38);
       }
     }
   }

@@ -150,7 +150,7 @@ export class Aircraft extends THREE.Group {
           float vis = smoothstep(500.0, 1400.0, uRpm);
           float radial = smoothstep(0.08, 0.2, r) * (1.0 - smoothstep(0.85, 1.0, r / 0.98));
           float streak = 0.55 + 0.45 * pow(abs(sin(a * 1.0)), 6.0);  // faint 2-blade ghost
-          float alpha = vis * radial * (0.12 + 0.16 * streak) * (0.6 + 0.4 * smoothstep(0.3, 0.9, r));
+          float alpha = vis * radial * (0.20 + 0.26 * streak) * (0.55 + 0.45 * smoothstep(0.3, 0.9, r));
           gl_FragColor = vec4(uColor, alpha); }`,
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
     });

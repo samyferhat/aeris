@@ -170,8 +170,9 @@ async function boot() {
     engine.csm.update();
     if (aircraft) {
       particles.setLight(atmosphere.sunDir, atmosphere.sunColor);
-      particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators,
-        renderer.getDrawingBufferSize(_size).y * 0.5, atmosphere.night);
+      // Metres-at-one-metre to pixels: the projection scale for point sprites.
+      const pixelScale = renderer.getDrawingBufferSize(_size).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+      particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators, pixelScale, atmosphere.night);
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
