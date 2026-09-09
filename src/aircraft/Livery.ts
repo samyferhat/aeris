@@ -280,3 +280,56 @@ export function applyTyre(material: THREE.MeshStandardMaterial) {
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vTyreRough;');
   };
 }
+
+
+/**
+ * Cabin trim: headliner, side panels, glareshield. They arrive as flat colours, which
+ * in a view where they fill a third of the frame reads as untextured plastic. A little
+ * vinyl grain, a seam every so often, and some dirt collecting low down is enough for
+ * the eye to accept them as material.
+ */
+export function applyCabinTrim(material: THREE.MeshStandardMaterial, kind: 'trim' | 'plastic' | 'carpet') {
+  material.roughness = kind === 'plastic' ? 0.72 : kind === 'carpet' ? 0.95 : 0.82;
+  material.metalness = 0;
+  const prev = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prev?.call(material, shader, renderer);
+    shader.uniforms.uRootInverse = rootInverse;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+uniform mat4 uRootInverse;
+${LIVERY_GLSL}`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vRootPos = (uRootInverse * (modelMatrix * vec4(transformed, 1.0))).xyz;
+        vRootNormal = normalize(mat3(uRootInverse) * (mat3(modelMatrix) * objectNormal));`);
+    const grain = kind === 'carpet' ? '52.0' : kind === 'plastic' ? '180.0' : '120.0';
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+${LIVERY_GLSL}
+float vTrimRough; float vTrimHeight;`)
+      .replace('#include <map_fragment>', `
+        {
+          vec3 P = vRootPos;
+          float grain = fbm3(P * ${grain});
+          float weave = fbm3(P * vec3(${grain} * 2.2, ${grain} * 0.4, ${grain} * 2.2));
+          // Trim seams run across the cabin every 30 cm.
+          float seam = seamMask(P.z, 0.31, 0.004) * (1.0 - abs(vRootNormal.y));
+          // Grime collects low and around the door frames.
+          float low = 1.0 - smoothstep(-0.2, 0.5, P.y);
+          diffuseColor.rgb *= 0.82 + 0.30 * grain;
+          diffuseColor.rgb *= 1.0 - 0.22 * seam;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.80, 0.78, 0.74), low * 0.45);
+          vTrimRough = clamp(roughness + 0.18 * weave - 0.10 * seam, 0.15, 1.0);
+          vTrimHeight = (grain - 0.5) * 0.0006 - seam * 0.0012;
+        }`)
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vTrimRough;')
+      .replace('#include <normal_fragment_maps>', `
+        {
+          vec3 dpx = dFdx(-vViewPosition), dpy = dFdy(-vViewPosition);
+          float dhx = dFdx(vTrimHeight), dhy = dFdy(vTrimHeight);
+          vec3 r1 = cross(dpy, normal), r2 = cross(normal, dpx);
+          float det = dot(dpx, r1);
+          normal = normalize(abs(det) * normal - sign(det) * (dhx * r1 + dhy * r2));
+        }`);
+  };
+}

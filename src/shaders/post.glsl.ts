@@ -253,3 +253,17 @@ void main(){
   float exposure = clamp(uKey / max(avg, 1e-4), uMinExposure, uMaxExposure) * uManual;
   gl_FragColor = vec4(toSRGB(aces(c * exposure)), 1.0);
 }`;
+
+
+/** Small tent blur used to take the dither pattern off the cloud buffer. */
+export const blurFrag = /* glsl */ `
+precision highp float;
+uniform sampler2D tDiffuse; uniform vec2 uTexel; varying vec2 vUv;
+void main(){
+  vec4 c = texture2D(tDiffuse, vUv) * 4.0;
+  c += (texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)) + texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0))
+      + texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)) + texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y))) * 2.0;
+  c += texture2D(tDiffuse, vUv + uTexel) + texture2D(tDiffuse, vUv - uTexel)
+     + texture2D(tDiffuse, vUv + vec2(uTexel.x, -uTexel.y)) + texture2D(tDiffuse, vUv + vec2(-uTexel.x, uTexel.y));
+  gl_FragColor = c / 16.0;
+}`;

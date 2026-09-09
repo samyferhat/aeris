@@ -26,7 +26,7 @@ uniform vec2 uResolution;
 uniform float uFrame;
 varying vec2 vUv;
 
-#define STEPS 40
+#define STEPS 48
 #define LIGHT_STEPS 4
 
 float linearDepth(float z) {
@@ -36,6 +36,13 @@ float linearDepth(float z) {
 float remap(float v, float lo, float hi, float nlo, float nhi) { return nlo + (clamp((v - lo) / (hi - lo), 0.0, 1.0)) * (nhi - nlo); }
 float hg(float mu, float g) { float gg = g * g; return (1.0 - gg) / (4.0 * PI * pow(1.0 + gg - 2.0 * g * mu, 1.5)); }
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+// Interleaved gradient noise (Jimenez). The ray start has to be offset per pixel or the
+// march lays down visible shells; white noise turns that into static and an ordered
+// 4x4 dither turns it into venetian blinds, because both correlate with the pixel grid.
+// This one decorrelates along both axes at once and takes a small blur cleanly.
+float interleavedGradient(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 
 // Height fraction inside the layer 0..1
 float heightFrac(vec3 p) { return clamp((p.y - uCloudBase) / (uCloudTop - uCloudBase), 0.0, 1.0); }
@@ -104,13 +111,15 @@ void main() {
   else if (ro.y > uCloudTop) { if (rd.y >= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } t0 = tTop; t1 = tBase; }
   else { t0 = 0.0; t1 = rd.y > 0.0 ? tTop : (rd.y < 0.0 ? tBase : 1e5); }
   t1 = min(t1, sceneDist);
-  t1 = min(t1, 24000.0);
+  // Shorter rays mean shorter steps for the same budget, and past this range the layer
+  // is a haze band anyway.
+  t1 = min(t1, 13000.0);
   if (t1 <= t0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
 
   float segLen = t1 - t0;
   float stepLen = max(segLen / float(STEPS), 12.0);
   int steps = int(min(float(STEPS), segLen / stepLen) + 1.0);
-  float jitter = hash12(gl_FragCoord.xy + fract(uFrame * 0.618) * 100.0);
+  float jitter = interleavedGradient(gl_FragCoord.xy);
   float t = t0 + stepLen * jitter;
 
   float mu = dot(rd, uSunDir);
@@ -129,7 +138,7 @@ void main() {
       float lt = lightMarch(p, sigma);
       // ambient: darker at the base, brighter towards the top
       vec3 amb = mix(uAmbientBottom, uAmbientTop, hf) * (0.55 + 0.45 * hf);
-      vec3 S = (sunL * lt * phase + amb * 0.28) * d * sigma;
+      vec3 S = (sunL * lt * phase + amb * 0.42) * d * sigma;
       // energy-conserving integration (Frostbite)
       vec3 Sint = (S - S * exp(-ext)) / (d * sigma);
       scattered += T * Sint;

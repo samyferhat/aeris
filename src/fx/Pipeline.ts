@@ -5,7 +5,7 @@ import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
 import { atmoUniforms } from '../sky/Atmosphere';
 import { makeCloudShapeTexture, makeCloudDetailTexture, makeWeatherTexture } from '../sky/CloudNoise';
 import cloudsFrag from '../shaders/clouds.frag.glsl?raw';
-import { fsVert, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag, lumFrag, downsampleFrag, adaptFrag, toneFrag } from '../shaders/post.glsl';
+import { fsVert, blurFrag, aoFrag, aoBlurFrag, godMaskFrag, godBlurFrag, compositeFrag, motionBlurFrag, dofFrag, grainFrag, lumFrag, downsampleFrag, adaptFrag, toneFrag } from '../shaders/post.glsl';
 
 const _v2 = new THREE.Vector2();
 
@@ -18,6 +18,8 @@ const _v2 = new THREE.Vector2();
 export class Pipeline {
   private sceneRT: THREE.WebGLRenderTarget;
   private cloudRT: THREE.WebGLRenderTarget;
+  private cloudRT2!: THREE.WebGLRenderTarget;
+  private blurMat!: THREE.ShaderMaterial;
   private aoRT: THREE.WebGLRenderTarget;
   private aoRT2: THREE.WebGLRenderTarget;
   private godRT: THREE.WebGLRenderTarget;
@@ -72,6 +74,10 @@ export class Pipeline {
   readonly ambientTop = new THREE.Color(0.3, 0.5, 0.9);
   readonly ambientBottom = new THREE.Color(0.35, 0.4, 0.5);
 
+  /** The weather map, shared with every material so the ground can be cloud-shadowed. */
+  readonly weather = makeWeatherTexture(256);
+
+
   constructor(private renderer: THREE.WebGLRenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     this.w = size.x; this.h = size.y;
@@ -84,9 +90,11 @@ export class Pipeline {
     };
     this.sceneRT = hdr(size.x, size.y, true);
     this.pingRT = hdr(size.x, size.y); this.pongRT = hdr(size.x, size.y);
-    // Clouds are low frequency and are upsampled with a depth-aware filter, so a quarter
-    // of the linear resolution is indistinguishable and four times cheaper.
-    this.cloudRT = hdr(size.x >> 2, size.y >> 2);
+    // Half resolution. A quarter was cheaper but the cloud edges are the one place the
+    // eye reads detail in the sky, and at a quarter they came back blocky through the
+    // upsample however good the filter was.
+    this.cloudRT = hdr(size.x >> 1, size.y >> 1);
+    this.cloudRT2 = hdr(size.x >> 1, size.y >> 1);
     this.aoRT = new THREE.WebGLRenderTarget(size.x >> 1, size.y >> 1, { type: THREE.UnsignedByteType, depthBuffer: false });
     this.aoRT2 = this.aoRT.clone();
     this.godRT = new THREE.WebGLRenderTarget(size.x >> 2, size.y >> 2, { type: THREE.HalfFloatType, depthBuffer: false });
@@ -96,32 +104,35 @@ export class Pipeline {
 
     const mk = (frag: string, uniforms: Record<string, THREE.IUniform>) => new THREE.ShaderMaterial({ vertexShader: fsVert, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false });
     this.cloudMat = mk(cloudsFrag.replace('#include <atmosphere>', (THREE.ShaderChunk as any).atmosphere), {
-      ...atmoUniforms, tDepth: { value: this.depth }, tShape: { value: makeCloudShapeTexture(64) }, tDetail: { value: makeCloudDetailTexture(32) }, tWeather: { value: makeWeatherTexture(256) },
+      ...atmoUniforms, tDepth: { value: this.depth }, tShape: { value: makeCloudShapeTexture(64) }, tDetail: { value: makeCloudDetailTexture(32) }, tWeather: { value: this.weather },
       uInvProjection: { value: new THREE.Matrix4() }, uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
       uNear: { value: camera.near }, uFar: { value: camera.far }, uTime: { value: 0 }, uCoverage: { value: this.cloudCoverage },
       uCloudBase: { value: this.cloudBase }, uCloudTop: { value: this.cloudTop },
       uDensityBias: { value: 0.82 }, uDensitySlope: { value: 0.75 }, uDensityScale: { value: 1.0 }, uAmbientTop: { value: this.ambientTop }, uAmbientBottom: { value: this.ambientBottom },
-      uSunColor: { value: this.sunColor }, uWind: { value: new THREE.Vector2(1, 0.3) }, uResolution: { value: new THREE.Vector2(size.x >> 2, size.y >> 2) }, uFrame: { value: 0 },
+      uSunColor: { value: this.sunColor }, uWind: { value: new THREE.Vector2(1, 0.3) }, uResolution: { value: new THREE.Vector2(size.x >> 1, size.y >> 1) }, uFrame: { value: 0 },
     });
     // No glslVersion override: three.js already compiles every shader as `#version 300 es`
     // with GLSL1 compatibility defines, so `sampler3D` / `texture()` work as-is.
 
+    this.blurMat = mk(blurFrag, { tDiffuse: { value: null }, uTexel: { value: new THREE.Vector2() } });
     this.aoMat = mk(aoFrag, { tDepth: { value: this.depth }, uNear: { value: camera.near }, uFar: { value: camera.far }, uInvProjection: { value: new THREE.Matrix4() }, uProjection: { value: new THREE.Matrix4() }, uTexel: { value: new THREE.Vector2(1 / (size.x >> 1), 1 / (size.y >> 1)) }, uRadius: { value: 0.9 }, uFrame: { value: 0 } });
     this.aoBlurMat = mk(aoBlurFrag, { tAO: { value: null }, tDepth: { value: this.depth }, uDir: { value: new THREE.Vector2() } });
     this.godMaskMat = mk(godMaskFrag, { tDepth: { value: this.depth }, tClouds: { value: this.cloudRT.texture }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 } });
     this.godBlurMat = mk(godBlurFrag, { tMask: { value: null }, uSunScreen: { value: this.sunScreen }, uDensity: { value: 0.9 }, uDecay: { value: 0.93 } });
     this.compositeMat = mk(compositeFrag, {
       tScene: { value: this.sceneRT.texture }, tClouds: { value: this.cloudRT.texture }, tDepth: { value: this.depth }, tGod: { value: this.godRT.texture }, tAO: { value: this.aoRT.texture },
-      uCloudTexel: { value: new THREE.Vector2(1 / (size.x >> 2), 1 / (size.y >> 2)) }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 }, uSunColor: { value: this.sunColor },
+      uCloudTexel: { value: new THREE.Vector2(1 / (size.x >> 1), 1 / (size.y >> 1)) }, uSunScreen: { value: this.sunScreen }, uSunVisible: { value: 0 }, uSunColor: { value: this.sunColor },
       uGodStrength: { value: 0.6 }, uAOStrength: { value: 0.5 }, uFlareStrength: { value: 0.5 }, uAspect: { value: size.x / size.y }, uNear: { value: camera.near }, uFar: { value: camera.far },
     });
     this.motionMat = mk(motionBlurFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uInvViewProj: { value: new THREE.Matrix4() }, uPrevViewProj: { value: new THREE.Matrix4() }, uStrength: { value: 0.35 }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uNear: { value: camera.near }, uFar: { value: camera.far } });
-    this.dofMat = mk(dofFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uFocus: { value: 30 }, uMaxCoc: { value: 7 }, uNear: { value: camera.near }, uFar: { value: camera.far } });
+    this.dofMat = mk(dofFrag, { tDiffuse: { value: null }, tDepth: { value: this.depth }, uTexel: { value: new THREE.Vector2(1 / size.x, 1 / size.y) }, uFocus: { value: 55 }, uMaxCoc: { value: 3.0 }, uNear: { value: camera.near }, uFar: { value: camera.far } });
     this.grainMat = mk(grainFrag, { tDiffuse: { value: null }, uTime: { value: 0 }, uAmount: { value: 0.045 }, uVignette: { value: 0.3 } });
     // Bloom runs at half resolution: it is a wide blur, so nothing is lost and the
     // five-level mip chain costs a quarter as much.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x >> 1, size.y >> 1), 0.22, 0.55, 1.15);
     this.fxaa.setSize(size.x, size.y);
+    // Bind the shared cloud-shadow map before any material compiles against it.
+    atmoUniforms.uCsWeather.value = this.weather;
 
     // ---- auto exposure ----------------------------------------------------
     const lumOpts: THREE.RenderTargetOptions = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RedFormat };
@@ -150,11 +161,11 @@ export class Pipeline {
     this.depth.image.width = w; this.depth.image.height = h;
     this.depth.dispose();
     this.sceneRT.setSize(w, h); this.pingRT.setSize(w, h); this.pongRT.setSize(w, h); this.ldrRT.setSize(w, h); this.ldrRT2.setSize(w, h);
-    this.cloudRT.setSize(w >> 2, h >> 2); this.aoRT.setSize(w >> 1, h >> 1); this.aoRT2.setSize(w >> 1, h >> 1);
+    this.cloudRT.setSize(w >> 1, h >> 1); this.cloudRT2.setSize(w >> 1, h >> 1); this.aoRT.setSize(w >> 1, h >> 1); this.aoRT2.setSize(w >> 1, h >> 1);
     this.godRT.setSize(w >> 2, h >> 2); this.godRT2.setSize(w >> 2, h >> 2);
-    this.cloudMat.uniforms.uResolution.value.set(w >> 2, h >> 2);
+    this.cloudMat.uniforms.uResolution.value.set(w >> 1, h >> 1);
     this.aoMat.uniforms.uTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
-    this.compositeMat.uniforms.uCloudTexel.value.set(1 / (w >> 2), 1 / (h >> 2));
+    this.compositeMat.uniforms.uCloudTexel.value.set(1 / (w >> 1), 1 / (h >> 1));
     this.compositeMat.uniforms.uAspect.value = w / h;
     this.motionMat.uniforms.uTexel.value.set(1 / w, 1 / h);
     this.dofMat.uniforms.uTexel.value.set(1 / w, 1 / h);
@@ -235,7 +246,17 @@ export class Pipeline {
     cu.uTime.value = this.time; cu.uFrame.value = this.frame;
     cu.uCoverage.value = this.cloudCoverage; cu.uCloudBase.value = this.cloudBase; cu.uCloudTop.value = this.cloudTop;
     cu.uDensityBias.value = this.cloudDensity.bias; cu.uDensitySlope.value = this.cloudDensity.slope; cu.uDensityScale.value = this.cloudDensity.scale;
-    this.blit(this.cloudMat, this.cloudRT);
+    // Keep the shared cloud-shadow uniforms in step with the volume.
+    atmoUniforms.uCsWeather.value = this.weather;
+    atmoUniforms.uCsWind.value.copy(cu.uWind.value);
+    atmoUniforms.uCsTime.value = this.time;
+    atmoUniforms.uCsCoverage.value = this.cloudCoverage;
+    atmoUniforms.uCsBase.value = this.cloudBase;
+    this.blit(this.cloudMat, this.cloudRT2);
+    // Take the dither off before the depth-aware upsample sees it.
+    this.blurMat.uniforms.tDiffuse.value = this.cloudRT2.texture;
+    this.blurMat.uniforms.uTexel.value.set(1 / (this.w >> 1), 1 / (this.h >> 1));
+    this.blit(this.blurMat, this.cloudRT);
     // 3. god rays
     this.godMaskMat.uniforms.uSunVisible.value = this.sunVisible;
     this.blit(this.godMaskMat, this.godRT2);

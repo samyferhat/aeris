@@ -77,7 +77,7 @@ export class Terrain extends THREE.Group {
         else if (i === 0 || i === seg) h = anchored(j, x, z, false);
         else h = hf.getHeight(x, z);
         pos[p] = x; pos[p + 1] = h; pos[p + 2] = z;
-        hf.getNormal(x, z, tmp);
+        hf.getNormal(x, z, tmp, step * 0.85);
         nor[p] = tmp.x; nor[p + 1] = tmp.y; nor[p + 2] = tmp.z;
         p += 3;
         uv[q++] = i / seg; uv[q++] = j / seg;

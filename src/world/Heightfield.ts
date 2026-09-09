@@ -47,11 +47,12 @@ export class Heightfield {
     // Chunked so the browser can paint between batches.
     const BATCHES = 6, PER = 26000;
     for (let b = 0; b < BATCHES; b++) {
-      hydraulicErosion(this.data, HF_RES, this.cell, (i, j) => this.erodeMask[j * HF_RES + i], { droplets: PER, radius: 3 }, 1337 + b * 7919);
+      hydraulicErosion(this.data, HF_RES, this.cell, (i, j) => this.erodeMask[j * HF_RES + i], { droplets: PER }, 1337 + b * 7919);
       onProgress?.(0.35 + 0.5 * ((b + 1) / BATCHES), 'Érosion hydraulique');
       await yield_();
     }
-    smooth(this.data, HF_RES, 0.45, (i, j) => this.erodeMask[j * HF_RES + i]);
+    smooth(this.data, HF_RES, 0.55, (i, j) => this.erodeMask[j * HF_RES + i]);
+    smooth(this.data, HF_RES, 0.35, (i, j) => this.erodeMask[j * HF_RES + i]);
     onProgress?.(0.92, 'Finition du terrain');
     this.carveRunway();
     for (let i = 0; i < this.data.length; i++) if (this.data[i] > this.maxHeight) this.maxHeight = this.data[i];
@@ -141,8 +142,13 @@ export class Heightfield {
   /** Ground surface (terrain or sea level) for physics contacts. */
   getGround(x: number, z: number): number { return Math.max(0, this.getHeight(x, z)); }
 
-  getNormal(x: number, z: number, out = new THREE.Vector3()): THREE.Vector3 {
-    const e = this.cell;
+  /**
+   * Surface normal. `spacing` should match the sampling of the mesh being built: a
+   * coarse tile that samples every 30 m but takes its normals from the 8.8 m grid picks
+   * up every erosion rill, and at a distance those alias into shimmering flutes.
+   */
+  getNormal(x: number, z: number, out = new THREE.Vector3(), spacing = this.cell): THREE.Vector3 {
+    const e = Math.max(this.cell, spacing);
     const hl = this.getHeight(x - e, z), hr = this.getHeight(x + e, z);
     const hd = this.getHeight(x, z - e), hu = this.getHeight(x, z + e);
     return out.set(hl - hr, 2 * e, hd - hu).normalize();

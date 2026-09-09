@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FlightModel } from './FlightModel';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
-import { applyLivery, applyCockpitMetal, applyTyre, rootInverse } from './Livery';
+import { applyLivery, applyCockpitMetal, applyTyre, applyCabinTrim, rootInverse } from './Livery';
 import { Instruments } from './Instruments';
 import { clamp, lerp } from '../core/Noise';
 
@@ -70,6 +70,12 @@ export class Aircraft extends THREE.Group {
             applyCockpitMetal(std); replacement = std;
           } else if (m.name === 'Rubber_Tire') {
             applyTyre(std); replacement = std;
+          } else if (m.name === 'Cockpit_Trim' || m.name === 'Cockpit_Walls') {
+            applyCabinTrim(std, 'trim'); replacement = std;
+          } else if (m.name === 'Cockpit_Plastic') {
+            applyCabinTrim(std, 'plastic'); replacement = std;
+          } else if (m.name === 'Cockpit_Carpet') {
+            applyCabinTrim(std, 'carpet'); replacement = std;
           } else if (m.name === 'Gauge_Faces') {
             // Swap the still atlas for a canvas that is redrawn from the flight state.
             this.instruments = new Instruments(1024);

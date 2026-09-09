@@ -15,6 +15,13 @@ export const atmoUniforms = {
   uMieG: { value: 0.76 },
   uHazeAmount: { value: 0.25 },
   uSunTransmit: { value: new THREE.Color(1, 1, 1) },
+  // Filled in by the Pipeline, which owns the cloud weather map.
+  uCsWeather: { value: null as THREE.Texture | null },
+  uCsWind: { value: new THREE.Vector2(1, 0.3) },
+  uCsTime: { value: 0 },
+  uCsCoverage: { value: 0.42 },
+  uCsBase: { value: 950 },
+  uCsStrength: { value: 0.62 },
 };
 
 /**
@@ -72,8 +79,10 @@ export class Atmosphere {
     this.material.uniforms.uNight.value = this.night;
     this.material.uniforms.uStarsRotation.value = this.hour / 24 * Math.PI * 2;
     // Haze: strongest at dawn, then burns off.
-    atmoUniforms.uHazeAmount.value = lerp(0.12, 0.55, smoothstep(0.35, 0.0, Math.abs(this.hour - 6.5) / 4));
-    atmoUniforms.uMieCoeff.value = lerp(4e-6, 1.2e-5, smoothstep(0.2, -0.05, el));
+    // A little standing haze at all hours: without it distant ridges sit flat against
+    // the sea instead of receding, and the eye reads the island as a model.
+    atmoUniforms.uHazeAmount.value = lerp(0.20, 0.60, smoothstep(0.35, 0.0, Math.abs(this.hour - 6.5) / 4));
+    atmoUniforms.uMieCoeff.value = lerp(5.5e-6, 1.4e-5, smoothstep(0.2, -0.05, el));
     this.computeSunColor();
   }
 

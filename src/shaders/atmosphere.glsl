@@ -18,6 +18,12 @@ uniform float uMieCoeff;       // ~2e-6 clear .. 3e-5 hazy
 uniform float uMieG;           // 0.76
 uniform float uHazeAmount;     // extra low-altitude haze 0..1
 uniform vec3 uSunTransmit;     // sun colour after extinction down to the ground
+uniform sampler2D uCsWeather;
+uniform vec2 uCsWind;
+uniform float uCsTime;
+uniform float uCsCoverage;
+uniform float uCsBase;
+uniform float uCsStrength;    // 0 = off, 1 = full
 
 vec2 raySphere(vec3 ro, vec3 rd, float radius) {
   float b = dot(ro, rd);
@@ -83,7 +89,7 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
   // saturates instead of accumulating without bound.
   vec3 lost = vec3(1.0) - transmittance;
   vec3 msTint = mix(vec3(0.42, 0.55, 0.78), vec3(1.0), 0.62);
-  vec3 ms = lost * msTint * 0.030 * smoothstep(-0.14, 0.12, sunDir.y);
+  vec3 ms = lost * msTint * 0.020 * smoothstep(-0.14, 0.12, sunDir.y);
   return uSunIntensity * (sumR * BETA_R * pR + sumM * betaM * pM + ms);
 }
 
@@ -128,6 +134,27 @@ vec3 aerialPerspective(vec3 color, vec3 worldPos, vec3 camPos) {
   float mu = dot(rd, uSunDir);
   vec3 S = uSunIntensity * uSunTransmit * (sigmaR * phaseRayleigh(mu) + sigmaM * phaseMie(mu, uMieG));
   vec3 inscat = S / max(sigmaT, vec3(1e-12)) * (vec3(1.0) - T);
-  inscat += (vec3(1.0) - T) * MS_TINT * uSunIntensity * 0.030 * smoothstep(-0.14, 0.12, uSunDir.y);
+  inscat += (vec3(1.0) - T) * MS_TINT * uSunIntensity * 0.020 * smoothstep(-0.14, 0.12, uSunDir.y);
   return color * T + inscat;
+}
+
+
+/**
+ * Cloud shadows on the ground.
+ *
+ * Nothing else says "seen from an aeroplane" as directly as the slow dappling of cloud
+ * shadow across a landscape. The full volume is far too expensive to sample per
+ * fragment, but the shadow of a cumulus deck is a low-frequency pattern, so following
+ * the sun ray up to the cloud base and reading the same weather map the volume uses
+ * reproduces it for one texture fetch.
+ */
+float cloudShadow(vec3 worldPos) {
+  if (uCsStrength <= 0.001 || uSunDir.y <= 0.06) return 1.0;
+  float t = (uCsBase + 250.0 - worldPos.y) / uSunDir.y;
+  vec3 p = worldPos + uSunDir * max(t, 0.0);
+  vec2 wuv = (p.xz + uCsWind * uCsTime * 4.0) * 0.00006;
+  float w = texture2D(uCsWeather, wuv).r;
+  float cov = clamp((w - 0.27) / 0.44 + (uCsCoverage - 0.5) * 1.7, 0.0, 1.0);
+  // Soft edges: a cumulus shadow has a penumbra hundreds of metres wide.
+  return 1.0 - uCsStrength * smoothstep(0.16, 0.66, cov);
 }

@@ -23,8 +23,15 @@ export interface ErosionParams {
 }
 
 export const DEFAULT_EROSION: ErosionParams = {
-  droplets: 260000, radius: 3, inertia: 0.06, capacity: 5.0, minSlope: 0.008,
-  deposition: 0.28, erode: 0.42, evaporation: 0.018, gravity: 10, maxLifetime: 44,
+  droplets: 260000,
+  radius: 4,
+  // Inertia is the parameter that decides whether the result looks like terrain.
+  // Near zero, every droplet takes the steepest line and they all carve parallel rills:
+  // a corduroy hillside. With some momentum they overshoot, meander and merge, which is
+  // what produces a branching drainage network and the ridges between its branches.
+  inertia: 0.30,
+  capacity: 5.5, minSlope: 0.008,
+  deposition: 0.30, erode: 0.38, evaporation: 0.017, gravity: 10, maxLifetime: 52,
   initialSpeed: 1, initialWater: 1,
 };
 

@@ -12,6 +12,7 @@ const parsChunk = /* glsl */ `
 varying vec3 vAPWorldPos;
 `;
 const fragChunk = /* glsl */ `
+gl_FragColor.rgb *= cloudShadow(vAPWorldPos);
 gl_FragColor.rgb = aerialPerspective(gl_FragColor.rgb, vAPWorldPos, cameraPosition);
 `;
 const vertPars = /* glsl */ `varying vec3 vAPWorldPos;`;
