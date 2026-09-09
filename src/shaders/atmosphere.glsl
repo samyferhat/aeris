@@ -82,7 +82,7 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
   transmittance = exp(-(BETA_R * od.x + betaM * 1.1 * od.y));
   // Isotropic multiple scattering approximation: keeps the horizon white-blue instead of
   // yellow, and lifts shadows in hazy air.
-  vec3 ms = sumAmb * mix(BETA_R, vec3(dot(BETA_R, vec3(0.333))), 0.5) * 0.09 * (0.6 + 0.4 * sunT) * smoothstep(-0.12, 0.15, sunDir.y);
+  vec3 ms = sumAmb * mix(BETA_R, vec3(dot(BETA_R, vec3(0.333))), 0.5) * 0.022 * (0.6 + 0.4 * sunT) * smoothstep(-0.12, 0.15, sunDir.y);
   return uSunIntensity * (sumR * BETA_R * pR + sumM * betaM * pM + ms);
 }
 

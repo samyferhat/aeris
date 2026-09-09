@@ -110,8 +110,8 @@ def make_pant(name, axle, R, length_f, length_r, height, width, mat):
 
 # ================= MAIN GEAR
 def make_main_gear(sign):
-    root_p = Vector((sign*0.30, 0.45, -0.33)); axle = Vector((sign*1.25, 0.55, -0.68))
-    keys = [(0.30, 0.45, -0.33), (0.62, 0.48, -0.40), (0.95, 0.52, -0.52), (1.16, 0.55, -0.63), (1.25, 0.55, -0.68)]
+    root_p = Vector((sign*0.30, 0.45, -0.30)); axle = Vector((sign*1.25, 0.55, -0.68))
+    keys = [(0.30, 0.45, -0.30), (0.62, 0.48, -0.39), (0.95, 0.52, -0.52), (1.16, 0.55, -0.63), (1.25, 0.55, -0.68)]
     path = catmull_rom_open([(sign*x, y, z) for x, y, z in keys], 9)
     # leg fairing: ellipse chord 0.15 (Y) x 0.045 (thickness), aligned with tangent
     pts = [Vector(p) for p in path]
@@ -121,16 +121,16 @@ def make_main_gear(sign):
         u = Vector((0,1,0)); u = (u - d*u.dot(d)).normalized(); w = d.cross(u)
         fade = 1.0 if i < len(pts)-2 else 0.7
         rings.append([p + u*0.075*fade*math.cos(t) + w*0.022*fade*math.sin(t) for t in [2*math.pi*k/14 for k in range(14)]])
-    rings[0] = [q + Vector((-sign*0.05, 0, 0)) for q in rings[0]]
+    rings[0] = [q + Vector((-sign*0.12, 0, 0.03)) for q in rings[0]]
     v, f = loft(rings, cap_start='ngon', cap_end='ngon')
-    leg = new_mesh_object('Gear_%s' % ('R' if sign > 0 else 'L'), v, f, M_BODY); shade_smooth_angle(leg, 40)
+    leg = new_mesh_object('Gear_%s' % ('L' if sign > 0 else 'R'), v, f, M_BODY); shade_smooth_angle(leg, 40)
     pant = make_pant('_pant', axle, 0.22, 0.34, 0.46, 0.32, 0.24, M_BODY)
     # axle stub
     stub = revolve('_stub', [(0, -sign*0.16), (0.03, -sign*0.16), (0.03, sign*0.02), (0, sign*0.02)], M_METAL, 12, axle, 'X')
     join_into(leg, [pant, stub])
     place_pivot(leg, root_p)
     parent_keep(leg, root)
-    wheel = make_wheel('Wheel_%s' % ('R' if sign > 0 else 'L'), axle, 0.22, 0.16, 0.34, 0.32, leg)
+    wheel = make_wheel('Wheel_%s' % ('L' if sign > 0 else 'R'), axle, 0.22, 0.16, 0.34, 0.32, leg)
     return leg
 make_main_gear(1); make_main_gear(-1)
 
@@ -180,7 +180,7 @@ def blade_rings(sign):
                 bl = (0.16 - r) / 0.08
                 x = x * (1 - bl) + rr * math.cos(ang) * bl; y = y * (1 - bl) + rr * math.sin(ang) * bl
             xp = x * math.cos(beta) + y * math.sin(beta); yp = -x * math.sin(beta) + y * math.cos(beta)
-            if sign < 0: xp, yp = -xp, yp
+            if sign > 0: xp = -xp
             ring.append(HUB + Vector((xp, yp, sign * r)))
         rings.append(ring)
     return rings
@@ -188,7 +188,7 @@ for sgn, nm in ((1, '_bladeU'), (-1, '_bladeD')):
     rings = blade_rings(sgn)
     tipc = HUB + Vector((0, 0, sgn * 0.955))
     v, f = loft(rings, cap_start='ngon', cap_end=tipc)
-    if sgn < 0:
+    if sgn > 0:
         f = [tuple(reversed(fc)) for fc in f]
     b = new_mesh_object(nm, v, f, M_BLADE); b.data.materials.append(M_TIP)
     for p in b.data.polygons:
@@ -209,8 +209,8 @@ parent_keep(disc, root)
 
 # ================= exhaust + cowl intakes + lights (joined into Fuselage)
 fus = bpy.data.objects['Fuselage']
-exh = tube('_exh', [(0.14, -1.75, -0.22), (0.16, -1.62, -0.34), (0.19, -1.50, -0.40), (0.21, -1.40, -0.41)], 0.028, M_METAL, 12, cap=True)
-exh2 = tube('_exh2', [(0.19, -1.50, -0.40), (0.21, -1.40, -0.41)], 0.021, M_DARK, 12, cap=True)
+exh = tube('_exh', [(-0.14, -1.75, -0.22), (-0.16, -1.62, -0.34), (-0.19, -1.50, -0.40), (-0.21, -1.40, -0.41)], 0.028, M_METAL, 12, cap=True)
+exh2 = tube('_exh2', [(-0.19, -1.50, -0.40), (-0.21, -1.40, -0.41)], 0.021, M_DARK, 12, cap=True)
 parts = [exh, exh2]
 for sign in (1, -1):
     cx, cz = sign*0.20, 0.22
@@ -236,9 +236,9 @@ parts += [beacon, strobe]
 join_into(fus, parts + [bpy.data.objects[n] for n in ('_Stab', '_Fin', '_Fillet', '_StrutR', '_StrutL', '_Tie')])
 # nav lights joined into wings
 wings = bpy.data.objects['Wings']
-navL = revolve('_navL', [(0, 0), (0.025, 0), (0.022, 0.02), (0, 0.03)], M_RED, 10, (-5.50, 0.06, 1.15), 'X')
-navR = revolve('_navR', [(0, 0), (0.025, 0), (0.022, 0.02), (0, 0.03)], M_GRN, 10, (5.50, 0.06, 1.15), 'X')
-for vtx in navL.data.vertices: vtx.co.x = -5.50 - (vtx.co.x + 5.50)
-for p in navL.data.polygons: p.flip()
+navL = revolve('_navL', [(0, 0), (0.025, 0), (0.022, 0.02), (0, 0.03)], M_RED, 10, (5.50, 0.06, 1.15), 'X')
+navR = revolve('_navR', [(0, 0), (0.025, 0), (0.022, 0.02), (0, 0.03)], M_GRN, 10, (-5.50, 0.06, 1.15), 'X')
+for vtx in navR.data.vertices: vtx.co.x = -5.50 - (vtx.co.x + 5.50)
+for p in navR.data.polygons: p.flip()
 join_into(wings, [navL, navR])
 print('gear/prop done')

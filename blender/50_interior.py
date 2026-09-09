@@ -97,8 +97,8 @@ join_into(floor, [shelf]); parent_keep(floor, cock)
 
 # ---------------- instrument panel
 PY = -0.80; TILT = math.radians(8)
-panel = box('Panel', (0, PY, 0.33), (1.06, 0.03, 0.45), M_PL, 0.006)
-gl_keys = [(PY + 0.015, 0.545), (PY - 0.02, 0.56), (PY - 0.10, 0.565), (PY - 0.16, 0.555), (PY - 0.19, 0.53)]
+panel = box('Panel', (0, PY, 0.315), (1.06, 0.03, 0.42), M_PL, 0.006)
+gl_keys = [(PY + 0.015, 0.515), (PY - 0.02, 0.525), (PY - 0.08, 0.525), (PY - 0.13, 0.51), (PY - 0.15, 0.49)]
 gl_pts = catmull_rom_open(gl_keys, 8)
 rings = [[Vector((x, y, z)) for y, z in gl_pts] + [Vector((x, y, z - 0.02)) for y, z in reversed(gl_pts)] for x in (-0.55, -0.3, 0, 0.3, 0.55)]
 v, f = loft(rings, cap_start='ngon', cap_end='ngon')
@@ -106,7 +106,7 @@ glare = new_mesh_object('_glare', v, f, M_PL); shade_smooth_angle(glare, 40)
 parts = [glare]
 # six pack bezels + faces
 tiles = {'ASI': (0, 0), 'AI': (1, 0), 'ALT': (2, 0), 'TC': (0, 1), 'HDG': (1, 1), 'VSI': (2, 1)}
-layout = [('ASI', -0.40, 0.45), ('AI', -0.30, 0.45), ('ALT', -0.20, 0.45), ('TC', -0.40, 0.35), ('HDG', -0.30, 0.35), ('VSI', -0.20, 0.35)]
+layout = [('ASI', 0.40, 0.45), ('AI', 0.30, 0.45), ('ALT', 0.20, 0.45), ('TC', 0.40, 0.35), ('HDG', 0.30, 0.35), ('VSI', 0.20, 0.35)]
 def gauge(nm, cx, cz, r=0.042, face_tile=None):
     bez = revolve('_bez_' + nm, [(r*0.8, 0.0), (r*1.12, 0.0), (r*1.15, 0.010), (r*1.05, 0.016), (r*0.8, 0.012)], M_PL, 24, (cx, PY + 0.015, cz), 'Y')
     # face disc with UVs
@@ -128,14 +128,14 @@ def gauge(nm, cx, cz, r=0.042, face_tile=None):
 for nm, cx, cz in layout:
     parts += gauge(nm, cx, cz, 0.042, tiles[nm])
 # right side engine gauges (blank), small
-for cx, cz in ((0.32, 0.46), (0.42, 0.46), (0.32, 0.36), (0.42, 0.36)):
-    parts += gauge('e%d%d' % (int(cx*100), int(cz*100)), cx, cz, 0.03, None)
+for cx, cz in ((-0.32, 0.46), (-0.42, 0.46), (-0.32, 0.36), (-0.42, 0.36)):
+    parts += gauge('e%d%d' % (int(-cx*100), int(cz*100)), cx, cz, 0.03, None)
 # radio stack: 3 boxes with display faces mapped to atlas bottom row
 for i in range(3):
     cz = 0.47 - i*0.075
-    rb = box('_radio%d' % i, (0.10, PY + 0.03, cz), (0.16, 0.06, 0.065), M_PL, 0.004)
+    rb = box('_radio%d' % i, (-0.10, PY + 0.03, cz), (0.16, 0.06, 0.065), M_PL, 0.004)
     # display: small quad with UV into radio strip (row 2)
-    dx0, dx1 = 0.035, 0.175; dz0, dz1 = cz - 0.02, cz + 0.02
+    dx0, dx1 = -0.175, -0.035; dz0, dz1 = cz - 0.02, cz + 0.02
     verts = [(dx0, PY + 0.062, dz0), (dx1, PY + 0.062, dz0), (dx1, PY + 0.062, dz1), (dx0, PY + 0.062, dz1)]
     dq = new_mesh_object('_disp%d' % i, verts, [(0, 1, 2, 3)], M_GA)
     face_toward_y(dq)
@@ -146,23 +146,23 @@ for i in range(3):
     parts += [rb, dq]
 # switches row & knobs
 for k in range(8):
-    parts.append(box('_sw%d' % k, (-0.46 + k*0.045, PY + 0.02, 0.19), (0.012, 0.02, 0.025), M_CM))
+    parts.append(box('_sw%d' % k, (0.46 - k*0.045, PY + 0.02, 0.19), (0.012, 0.02, 0.025), M_CM))
 for k in range(4):
-    parts.append(revolve('_knob%d' % k, [(0, 0), (0.012, 0), (0.012, 0.025), (0, 0.025)], M_CM, 12, (0.24 + k*0.06, PY + 0.015, 0.20), 'Y'))
+    parts.append(revolve('_knob%d' % k, [(0, 0), (0.012, 0), (0.012, 0.025), (0, 0.025)], M_CM, 12, (-0.24 - k*0.06, PY + 0.015, 0.20), 'Y'))
 # magnetic compass on glareshield
-parts.append(box('_compass', (0, PY - 0.05, 0.60), (0.06, 0.06, 0.06), M_PL, 0.008))
+parts.append(box('_compass', (0, PY - 0.04, 0.555), (0.055, 0.055, 0.05), M_PL, 0.008))
 # panel lower lip / center pedestal
 parts.append(box('_pedestal', (0, PY + 0.10, -0.05), (0.16, 0.24, 0.50), M_PL, 0.01))
 join_into(panel, parts)
 parent_keep(panel, cock)
 
 # ---------------- yoke (pilot)
-YB = Vector((-0.28, PY + 0.02, 0.30))
-shaft = tube('Yoke_L', [(-0.28, PY + 0.02, 0.30), (-0.28, PY + 0.30, 0.30)], 0.014, M_CM, 10)
-hub = box('_yhub', (-0.28, PY + 0.31, 0.30), (0.09, 0.04, 0.06), M_PL, 0.01)
+YB = Vector((0.28, PY + 0.02, 0.30))
+shaft = tube('Yoke_L', [(0.28, PY + 0.02, 0.30), (0.28, PY + 0.30, 0.30)], 0.014, M_CM, 10)
+hub = box('_yhub', (0.28, PY + 0.31, 0.30), (0.09, 0.04, 0.06), M_PL, 0.01)
 horns = []
 for sgn in (1, -1):
-    keys = [(-0.28 + sgn*0.03, PY + 0.31, 0.30), (-0.28 + sgn*0.09, PY + 0.31, 0.31), (-0.28 + sgn*0.15, PY + 0.30, 0.36), (-0.28 + sgn*0.17, PY + 0.28, 0.43), (-0.28 + sgn*0.15, PY + 0.27, 0.49), (-0.28 + sgn*0.11, PY + 0.27, 0.52)]
+    keys = [(0.28 + sgn*0.03, PY + 0.31, 0.30), (0.28 + sgn*0.09, PY + 0.31, 0.31), (0.28 + sgn*0.15, PY + 0.30, 0.36), (0.28 + sgn*0.17, PY + 0.28, 0.43), (0.28 + sgn*0.15, PY + 0.27, 0.49), (0.28 + sgn*0.11, PY + 0.27, 0.52)]
     path = catmull_rom_open(keys, 12)
     horns.append(tube('_horn%d' % sgn, path, 0.013, M_PL, 10))
 join_into(shaft, [hub] + horns)
@@ -184,19 +184,22 @@ def seat(name, x):
     place_pivot(base, (x, 0.38, -0.29))
     parent_keep(base, cock)
     return base
-seat('Seat_L', -0.28); seat('Seat_R', 0.28)
+seat('Seat_L', 0.28); seat('Seat_R', -0.28)
 
 # ---------------- rudder pedals (pilot + copilot)
 peds = []
 for x in (-0.36, -0.20, 0.20, 0.36):
     peds.append(box('_ped%d' % int(x*100), (x, -0.62, -0.14), (0.07, 0.015, 0.11), M_CM, 0.003))
     peds.append(tube('_parm%d' % int(x*100), [(x, -0.62, -0.19), (x, -0.55, -0.29)], 0.008, M_CM, 8))
+clear_object('Rudder_Pedals')
+for _o in list(bpy.data.objects):
+    if _o.name.startswith('Rudder_Pedals'): bpy.data.objects.remove(_o, do_unlink=True)
 pedals = peds[0]; join_into(pedals, peds[1:]); pedals.name = 'Rudder_Pedals'; pedals.data.name = 'Rudder_Pedals'
 place_pivot(pedals, (0, -0.60, -0.29)); parent_keep(pedals, cock)
 
 # ---------------- throttle (push-pull knob)
-thr = tube('Throttle', [(0.05, PY + 0.015, 0.23), (0.05, PY + 0.09, 0.23)], 0.007, M_CM, 10)
-knob = revolve('_tknob', [(0, 0), (0.018, 0), (0.02, 0.02), (0.017, 0.035), (0, 0.04)], M_PL, 14, (0.05, PY + 0.09, 0.23), 'Y')
+thr = tube('Throttle', [(-0.02, PY + 0.015, 0.23), (-0.02, PY + 0.09, 0.23)], 0.007, M_CM, 10)
+knob = revolve('_tknob', [(0, 0), (0.018, 0), (0.02, 0.02), (0.017, 0.035), (0, 0.04)], M_PL, 14, (-0.02, PY + 0.09, 0.23), 'Y')
 join_into(thr, [knob])
-place_pivot(thr, (0.05, PY + 0.015, 0.23)); parent_keep(thr, cock)
+place_pivot(thr, (-0.02, PY + 0.015, 0.23)); parent_keep(thr, cock)
 print('interior done')

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FlightModel } from './FlightModel';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
+import { applyLivery, applyCockpitMetal, applyTyre, rootInverse } from './Livery';
 import { clamp, lerp } from '../core/Noise';
 
 const deg = THREE.MathUtils.degToRad;
@@ -33,25 +34,43 @@ export class Aircraft extends THREE.Group {
 
   private setup(root: THREE.Object3D) {
     this.add(root);
+    // Materials are shared between meshes, so patch each one exactly once and remember
+    // the replacement (the paint becomes a MeshPhysicalMaterial for its clearcoat).
+    const patched = new Map<THREE.Material, THREE.Material>();
     root.traverse((o) => {
       this.parts[o.name] = o;
       const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) {
-        mesh.castShadow = true; mesh.receiveShadow = true;
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const m of mats) {
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const out: THREE.Material[] = [];
+      for (const m of mats) {
+        let replacement = patched.get(m);
+        if (!replacement) {
           const std = m as THREE.MeshStandardMaterial;
-          if (!this.materials.includes(std)) {
-            this.materials.push(std);
-            if (std.map) std.map.anisotropy = 8;
-            std.envMapIntensity = 1.0;
-            if (m.name === 'Glass') this.setupGlass(std, mesh);
-            else if (m.name === 'PropBlur') this.setupPropDisc(mesh);
-            else if (m.name === 'Paint_Body' && (std as any).isMeshPhysicalMaterial === undefined) { /* std paint */ }
-            applyAerialPerspective(std);
+          if (std.map) std.map.anisotropy = 8;
+          std.envMapIntensity = 1.0;
+          if (m.name === 'Paint_Body') {
+            replacement = applyLivery(std);
+          } else if (m.name === 'Glass') {
+            this.setupGlass(std, mesh); replacement = std;
+          } else if (m.name === 'PropBlur') {
+            this.setupPropDisc(mesh); replacement = mesh.material as THREE.Material;
+            patched.set(m, replacement); out.push(replacement); continue;
+          } else if (m.name === 'Cockpit_Metal_Worn') {
+            applyCockpitMetal(std); replacement = std;
+          } else if (m.name === 'Rubber_Tire') {
+            applyTyre(std); replacement = std;
+          } else {
+            replacement = std;
           }
+          if ((replacement as THREE.ShaderMaterial).isShaderMaterial !== true) applyAerialPerspective(replacement);
+          patched.set(m, replacement);
+          this.materials.push(replacement);
         }
+        out.push(replacement);
       }
+      mesh.material = Array.isArray(mesh.material) ? out : out[0];
     });
     for (const n of ['Aileron_L', 'Aileron_R', 'Elevator', 'Rudder', 'Flap_L', 'Flap_R', 'Gear_Nose', 'Gear_L', 'Gear_R', 'Yoke_L', 'Propeller', 'Wheel_Nose', 'Wheel_L', 'Wheel_R'])
       if (this.parts[n]) this.rest[n] = { pos: this.parts[n].position.clone(), quat: this.parts[n].quaternion.clone() };
@@ -69,11 +88,21 @@ export class Aircraft extends THREE.Group {
     const prev = m.onBeforeCompile;
     m.onBeforeCompile = (s, r) => {
       prev?.call(m, s, r);
-      s.fragmentShader = s.fragmentShader.replace('#include <roughnessmap_fragment>', `
+      // MeshStandardMaterial has no generic `vUv`, so carry our own copy of the uv.
+      s.vertexShader = s.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vGlassUv;')
+        .replace('#include <uv_vertex>', '#include <uv_vertex>\nvGlassUv = uv;');
+      s.fragmentShader = s.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vGlassUv;')
+        .replace('#include <roughnessmap_fragment>', `
         float roughnessFactor = roughness;
-        { vec2 g = vUv * 140.0; float scratch = smoothstep(0.985, 1.0, sin(g.x * 1.7 + sin(g.y * 0.3) * 4.0) * sin(g.y * 0.9 + 3.0));
-          float smudge = 0.5 + 0.5 * sin(vUv.x * 23.0 + sin(vUv.y * 17.0) * 3.0);
-          roughnessFactor = roughness + scratch * 0.35 + smudge * 0.05; }`);
+        {
+          // Micro-scratches (fine anisotropic streaks) plus a slow polishing smudge.
+          vec2 g = vGlassUv * 140.0;
+          float scratch = smoothstep(0.985, 1.0, sin(g.x * 1.7 + sin(g.y * 0.3) * 4.0) * sin(g.y * 0.9 + 3.0));
+          float smudge = 0.5 + 0.5 * sin(vGlassUv.x * 23.0 + sin(vGlassUv.y * 17.0) * 3.0);
+          roughnessFactor = roughness + scratch * 0.35 + smudge * 0.05;
+        }`);
     };
   }
 
@@ -127,22 +156,29 @@ export class Aircraft extends THREE.Group {
     this.t += dt;
     this.position.copy(fm.position);
     this.quaternion.copy(fm.quaternion);
+    // The livery is evaluated in aircraft space, so the shaders need world -> root.
+    this.updateMatrixWorld(true);
+    rootInverse.value.copy(this.matrixWorld).invert();
     const set = (name: string, axis: THREE.Vector3, angle: number) => {
       const p = this.parts[name], r = this.rest[name]; if (!p || !r) return;
       p.quaternion.copy(r.quat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
     };
     const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3(0, 0, 1);
-    // Control surfaces (axes documented by the model export; sign conventions in README)
-    set('Aileron_L', X, deg(20) * fm.aileron);
-    set('Aileron_R', X, -deg(20) * fm.aileron);
-    set('Elevator', X, deg(22) * -fm.elevator);
-    set('Rudder', Y, deg(24) * -fm.rudder);
-    set('Flap_L', X, deg(30) * fm.flaps);
-    set('Flap_R', X, deg(30) * fm.flaps);
+    // Control surfaces. Model frame is +Z nose, +Y up, +X LEFT wing, and every hinge is
+    // aft of its pivot, so a positive rotation about local +X lifts a trailing edge.
+    //   roll right  -> left aileron trailing edge DOWN, right aileron UP
+    //   pull (nose up) -> elevator trailing edge UP
+    //   right rudder -> trailing edge swings toward -X (the aircraft's right)
+    set('Aileron_L', X, -deg(20) * fm.aileron);
+    set('Aileron_R', X, deg(20) * fm.aileron);
+    set('Elevator', X, deg(22) * fm.elevator);
+    set('Rudder', Y, deg(24) * fm.rudder);
+    set('Flap_L', X, -deg(30) * fm.flaps);
+    set('Flap_R', X, -deg(30) * fm.flaps);
     // Propeller
     const radPerSec = fm.rpm / 60 * Math.PI * 2;
     this.propAngle = (this.propAngle + radPerSec * dt) % (Math.PI * 2);
-    set('Propeller', Z, this.propAngle);
+    set('Propeller', Z, -this.propAngle);   // right-hand tractor: clockwise seen from the cockpit
     if (this.propDiscMaterial) { this.propDiscMaterial.uniforms.uRpm.value = fm.rpm; this.propDiscMaterial.uniforms.uAngle.value = this.propAngle * 0.13; }
     // Blades fade as the disc takes over (keeps a believable blur, not a solid disc)
     const prop = this.parts['Propeller'] as THREE.Mesh | undefined;
@@ -166,6 +202,7 @@ export class Aircraft extends THREE.Group {
     const yoke = this.parts['Yoke_L'], yr = this.rest['Yoke_L'];
     if (yoke && yr) {
       yoke.quaternion.copy(yr.quat).multiply(new THREE.Quaternion().setFromAxisAngle(Z, -fm.aileron * deg(45)));
+      // (rotation about +Z turns the wheel the same way the pilot's hands do)
       yoke.position.copy(yr.pos).add(new THREE.Vector3(0, 0, -fm.elevator * 0.06));
     }
     // Lights: nav always on at dusk/night, beacon rotating, strobe double-flash

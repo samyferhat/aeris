@@ -111,10 +111,10 @@ def build_ctrl(name, x0, x1, cut, sign, ncs=6):
     parent_keep(ob, root)
     return ob
 
-flapR = build_ctrl('Flap_R', 0.625, 2.945, FLAP_CUT, 1, 4)
-flapL = build_ctrl('Flap_L', 0.625, 2.945, FLAP_CUT, -1, 4)
-ailR = build_ctrl('Aileron_R', 3.06, 5.335, AIL_CUT, 1, 6)
-ailL = build_ctrl('Aileron_L', 3.06, 5.335, AIL_CUT, -1, 6)
+flapL = build_ctrl('Flap_L', 0.625, 2.945, FLAP_CUT, 1, 4)
+flapR = build_ctrl('Flap_R', 0.625, 2.945, FLAP_CUT, -1, 4)
+ailL = build_ctrl('Aileron_L', 3.06, 5.335, AIL_CUT, 1, 6)
+ailR = build_ctrl('Aileron_R', 3.06, 5.335, AIL_CUT, -1, 6)
 
 # ---- Horizontal stabiliser + elevator
 STAB_Z = 0.34; STAB_HINGE_Y = 5.50; STAB_CUT = 0.62

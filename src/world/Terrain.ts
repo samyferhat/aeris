@@ -102,7 +102,7 @@ export class Terrain extends THREE.Group {
       return t;
     };
     const set = (name: string) => ({ D: tex(`/textures/${name}/albedo.webp`, true), N: tex(`/textures/${name}/nrm.webp`) });
-    const grass = set('grass'), forest = set('forest'), cliff = set('cliff'), sand = set('sand');
+    const grass = set('grass'), forest = set('forest'), cliff = set('rockface'), sand = set('sand'), scree = set('scree');
 
     // Macro variation noise texture (CPU generated, tileable enough at this frequency).
     const N = 256, data = new Uint8Array(N * N * 4), noise = new SimplexNoise(77);
@@ -119,6 +119,7 @@ export class Terrain extends THREE.Group {
       tForestD: { value: forest.D }, tForestN: { value: forest.N },
       tCliffD: { value: cliff.D }, tCliffN: { value: cliff.N },
       tSandD: { value: sand.D }, tSandN: { value: sand.N },
+      tScreeD: { value: scree.D }, tScreeN: { value: scree.N },
       tMacro: { value: macro }, uSeaLevel: { value: 0 },
     };
     (mat as any)._apKey = "terrain";

@@ -17,7 +17,7 @@ export class CameraRig {
   pilotEye = new THREE.Vector3(-0.25, 0.62, 0.9);
   private chasePos = new THREE.Vector3();
   private chaseUp = new THREE.Vector3(0, 1, 0);
-  private orbit = { theta: 0.6, phi: 1.2, dist: 16 };
+  orbit = { theta: 0.6, phi: 1.2, dist: 16 };
   private shake = 0;
   private shakeVec = new THREE.Vector3();
   private headLag = new THREE.Vector3();

@@ -90,8 +90,12 @@ export class Atmosphere {
     this.sunColor.setRGB(c[0] * vis, c[1] * vis, c[2] * vis);
   }
 
-  /** Sun light intensity (lux-ish scale for the DirectionalLight). */
-  get sunIntensity(): number { return 3.2 * smoothstep(-0.03, 0.12, this.sunElevation); }
+  /**
+   * Irradiance for the sun DirectionalLight, on the same scale as the sky radiance the
+   * shaders produce. Chosen so a sunlit surface sits at roughly half the zenith sky
+   * brightness, which is what a correctly exposed photograph of a sunny day looks like.
+   */
+  get sunIntensity(): number { return 4.2 * smoothstep(-0.03, 0.12, this.sunElevation); }
 
   update(camera: THREE.Camera) {
     this.sky.position.copy(camera.position);

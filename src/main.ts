@@ -5,6 +5,7 @@ import { Input } from './core/Input';
 import { Heightfield, RUNWAY } from './world/Heightfield';
 import { Terrain } from './world/Terrain';
 import { Runway } from './world/Runway';
+import { Vegetation } from './world/Vegetation';
 import { Ocean } from './water/Ocean';
 import { Atmosphere } from './sky/Atmosphere';
 import { DynamicEnvironment } from './sky/Environment';
@@ -13,8 +14,9 @@ import { Aircraft } from './aircraft/Aircraft';
 import { CameraRig } from './aircraft/Cameras';
 import { HUD } from './ui/HUD';
 import { TimeSlider } from './ui/TimeSlider';
-import { PostProcessing } from './fx/PostProcessing';
+import { Pipeline } from './fx/Pipeline';
 
+const smoothstepJS = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const loadingFill = document.querySelector('#loading .fill') as HTMLElement;
 const loadingMsg = document.querySelector('#loading .msg') as HTMLElement;
 const progress = (p: number, msg: string) => { loadingFill.style.width = `${Math.round(p * 100)}%`; loadingMsg.textContent = msg; };
@@ -31,6 +33,7 @@ async function boot() {
   engine.setupShadows(camera);
 
   const hf = new Heightfield();
+  await hf.generate((p, label) => progress(0.05 + p * 0.18, label));
   progress(0.25, 'Chargement du ciel');
   const stars = await new RGBELoader().loadAsync('/hdri/kloppenheim_02.hdr');
   stars.mapping = THREE.EquirectangularReflectionMapping;
@@ -46,6 +49,10 @@ async function boot() {
   scene.add(ocean);
   const runway = new Runway(texLoader);
   scene.add(runway);
+  progress(0.5, 'Végétation');
+  const vegetation = new Vegetation(hf);
+  scene.add(vegetation);
+  for (const m of vegetation.materials) engine.setupShadowMaterial(m);
   engine.setupShadowMaterial(terrain.material);
   engine.setupShadowMaterial(ocean.material);
   runway.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.Material; if (m && !(m as any)._csm) { (m as any)._csm = true; engine.setupShadowMaterial(m); } });
@@ -69,7 +76,7 @@ async function boot() {
   fm.resetOnRunway(RUNWAY.x - 480, RUNWAY.z, RUNWAY.y, Math.PI / 2);
 
   progress(0.9, 'Post-traitement');
-  const post = new PostProcessing(renderer, scene, camera);
+  const post = new Pipeline(renderer, scene, camera);
   const hud = new HUD();
   const timeSlider = new TimeSlider(atmosphere.hour);
   const applyTime = (h: number) => {
@@ -77,6 +84,7 @@ async function boot() {
     engine.setSun(atmosphere.sunDir, atmosphere.sunColor, atmosphere.sunIntensity);
     environment.invalidate();
     runway.setNight(atmosphere.night);
+    post.sunColor.copy(atmosphere.sunColor).multiplyScalar(smoothstepJS(-0.05, 0.1, atmosphere.sunElevation));
   };
   timeSlider.onChange = applyTime;
   applyTime(atmosphere.hour);
@@ -94,10 +102,20 @@ async function boot() {
       case 'hud': hud.toggle(); break;
     }
   };
-  window.addEventListener('resize', () => { engine.resize(camera); post.resize(window.innerWidth, window.innerHeight); });
+  window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
 
+  // Debug/reproducible views: ?pos=x,y,z&hour=h&mode=orbit|chase|cockpit&heading=deg
+  const params = new URLSearchParams(location.search);
+  if (params.has('pos')) { const [x, y, z] = params.get('pos')!.split(',').map(Number); fm.position.set(x, y, z); fm.velocity.set(0, 0, 0); }
+  if (params.has('heading')) fm.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -THREE.MathUtils.degToRad(Number(params.get('heading'))));
+  if (params.has('hour')) timeSlider.set(Number(params.get('hour')));
+  if (params.has('mode')) rig.mode = params.get('mode') as any;
+  if (params.has('freeze')) paused = true;
+  if (params.has('debug')) post.debugView = params.get('debug') as any;
+  if (params.has('orbit')) { const [t, p, d] = params.get('orbit')!.split(',').map(Number); rig.orbit.theta = t; rig.orbit.phi = p; rig.orbit.dist = d; }
+  if (params.has('speed')) fm.velocity.copy(fm.forward.clone().multiplyScalar(Number(params.get('speed'))));
   document.getElementById('overlay')!.classList.add('gone');
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation };
 
   let last = performance.now();
   let turbulence = 0;
@@ -121,13 +139,16 @@ async function boot() {
     rig.update(dt, fm, input.consumeOrbit(), turbulence);
     atmosphere.update(camera);
     environment.update(scene, atmosphere.sky);
+    post.ambientTop.copy(environment.skyTop); post.ambientBottom.copy(environment.skyHorizon).multiplyScalar(0.6);
+    post.dofEnabled = rig.mode === 'cockpit';
     terrain.update(camera);
+    vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
     engine.csm.update();
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
-    post.render(dt);
+    post.render(dt, rig.mode);
   };
   loop();
 }
 
-boot().catch((e) => { console.error(e); loadingMsg.textContent = 'Erreur : ' + e.message; });
+boot().catch((e) => { console.error(e.stack); loadingMsg.textContent = 'Erreur : ' + e.message; });
