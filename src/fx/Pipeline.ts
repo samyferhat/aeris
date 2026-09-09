@@ -47,13 +47,21 @@ export class Pipeline {
   private lumRT!: THREE.WebGLRenderTarget;
   private lumRT2!: THREE.WebGLRenderTarget;
   private lumRT3!: THREE.WebGLRenderTarget;
+  private lumRT4!: THREE.WebGLRenderTarget;
   private adaptRT: THREE.WebGLRenderTarget[] = [];
   private adaptIndex = 0;
   private lumMat!: THREE.ShaderMaterial;
   private downMat!: THREE.ShaderMaterial;
   private adaptMat!: THREE.ShaderMaterial;
   private toneMat!: THREE.ShaderMaterial;
-  /** Middle-grey target for the auto exposure; raise for a brighter image. */
+  /**
+   * Middle-grey target for the auto exposure.
+   *
+   * A metering loop that simply tracks the scene will lift the night until it looks
+   * like day — which is what a camera does, and not what the night should feel like.
+   * Rather than clamping the exposure (that underexposes dark subjects in daylight, a
+   * runway seen from above for instance), the target itself is lowered after sunset.
+   */
   exposureKey = 0.44;
   manualExposure = 1.0;
   private fxaa = new FXAAPass();
@@ -152,14 +160,18 @@ export class Pipeline {
     const lumOpts: THREE.RenderTargetOptions = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RedFormat };
     this.lumRT = new THREE.WebGLRenderTarget(64, 64, lumOpts);
     this.lumRT2 = new THREE.WebGLRenderTarget(16, 16, lumOpts);
-    this.lumRT3 = new THREE.WebGLRenderTarget(1, 1, lumOpts);
+    // 64 -> 16 -> 4 -> 1, each stage a true 4x reduction. Skipping a stage looks like it
+    // works but leaves the final texel averaging only the middle sixteenth of the frame,
+    // which meters off whatever happens to be in the centre.
+    this.lumRT3 = new THREE.WebGLRenderTarget(4, 4, lumOpts);
+    this.lumRT4 = new THREE.WebGLRenderTarget(1, 1, lumOpts);
     this.adaptRT = [new THREE.WebGLRenderTarget(1, 1, lumOpts), new THREE.WebGLRenderTarget(1, 1, lumOpts)];
     this.lumMat = mk(lumFrag, { tDiffuse: { value: null }, uTexel: { value: new THREE.Vector2() } });
     this.downMat = mk(downsampleFrag, { tDiffuse: { value: null }, uTexel: { value: new THREE.Vector2() }, uSteps: { value: 4 } });
     this.adaptMat = mk(adaptFrag, { tCurrent: { value: null }, tPrevious: { value: null }, uRate: { value: 0.04 } });
     this.toneMat = mk(toneFrag, {
       tDiffuse: { value: null }, tLum: { value: this.adaptRT[0].texture },
-      uKey: { value: this.exposureKey }, uMinExposure: { value: 0.18 }, uMaxExposure: { value: 1.7 }, uManual: { value: 1 },
+      uKey: { value: this.exposureKey }, uMinExposure: { value: 0.16 }, uMaxExposure: { value: 3.2 }, uManual: { value: 1 },
     });
   }
 
@@ -333,9 +345,12 @@ export class Pipeline {
     this.downMat.uniforms.tDiffuse.value = this.lumRT2.texture;
     this.downMat.uniforms.uTexel.value.set(1 / 16, 1 / 16);
     this.blit(this.downMat, this.lumRT3);
+    this.downMat.uniforms.tDiffuse.value = this.lumRT3.texture;
+    this.downMat.uniforms.uTexel.value.set(1 / 4, 1 / 4);
+    this.blit(this.downMat, this.lumRT4);
     const prev = this.adaptRT[this.adaptIndex];
     const next = this.adaptRT[this.adaptIndex ^ 1];
-    this.adaptMat.uniforms.tCurrent.value = this.lumRT3.texture;
+    this.adaptMat.uniforms.tCurrent.value = this.lumRT4.texture;
     this.adaptMat.uniforms.tPrevious.value = prev.texture;
     this.adaptMat.uniforms.uRate.value = 1 - Math.exp(-dt * 1.6);
     this.blit(this.adaptMat, next);

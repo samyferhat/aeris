@@ -349,24 +349,25 @@ float vTrimRough; float vTrimHeight;`)
 // ---------------------------------------------------------------------------
 
 const MIG_GLSL = /* glsl */ `
-// Distance to a five-pointed star of outer radius 1 centred at the origin, in the
-// plane (a, b). Negative inside. Drawn rather than textured so it stays crisp.
-float starShape(vec2 p, float r) {
-  const float PI5 = 0.62831853;             // 2*pi/10
-  float a = atan(p.x, p.y);
-  float seg = mod(a + PI5, 2.0 * PI5) - PI5;
-  float d = length(p) * cos(seg) / cos(PI5 * 0.5);
-  // Inner radius of a regular five-pointed star.
-  return d - r * 0.382;
+// Signed distance to a five-pointed star (Inigo Quilez's construction: fold the plane
+// into one tenth by reflecting about the two symmetry axes, then measure to a single
+// edge). Drawn rather than textured so it stays crisp from any distance, and correct
+// rather than the pentagon a naive polar threshold gives.
+float sdStar5(vec2 p, float r, float rf) {
+  const vec2 k1 = vec2(0.809016994375, -0.587785252292);
+  const vec2 k2 = vec2(-k1.x, k1.y);
+  p.x = abs(p.x);
+  p -= 2.0 * max(dot(k1, p), 0.0) * k1;
+  p -= 2.0 * max(dot(k2, p), 0.0) * k2;
+  p.x = abs(p.x);
+  p.y -= r;
+  vec2 ba = rf * vec2(-k1.y, k1.x) - vec2(0.0, 1.0);
+  float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
+  return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
 }
 float starMask(vec2 p, float r) {
-  // Union of the pentagon and its five points, approximated by the polar form.
-  const float PI5 = 0.62831853;
-  float a = atan(p.x, p.y);
-  float k = mod(a, 2.0 * PI5) - PI5;
-  float rr = length(p);
-  float edge = r * 0.382 / max(cos(k), 0.2);
-  return 1.0 - smoothstep(edge - r * 0.02, edge + r * 0.02, rr);
+  float d = sdStar5(p, r, 0.382);
+  return 1.0 - smoothstep(-r * 0.02, r * 0.02, d);
 }
 `;
 
@@ -378,42 +379,54 @@ const MIG_BODY = /* glsl */ `
   float sideSign = P.x >= 0.0 ? 1.0 : -1.0;
 
   // ---- two-tone camouflage ----------------------------------------------
-  vec3 light = vec3(0.243, 0.290, 0.316);   // pale blue-grey
-  vec3 dark  = vec3(0.128, 0.157, 0.155);   // grey-green
-  vec3 pale  = vec3(0.330, 0.372, 0.392);   // the lightest of the three tones
-  float blob = fbm3(P * vec3(0.075, 0.14, 0.055));
-  float blob2 = fbm3(P * vec3(0.20, 0.26, 0.15) + 11.0);
-  float camo = smoothstep(0.44, 0.56, blob + 0.18 * (blob2 - 0.5));
+  // Three tones, as on the photographs: a pale blue-grey, a mid blue and a darker
+  // grey-green, in patches a couple of metres across with hard-ish edges.
+  vec3 light = vec3(0.255, 0.310, 0.345);
+  vec3 dark  = vec3(0.105, 0.140, 0.140);
+  vec3 pale  = vec3(0.395, 0.440, 0.470);
+  float blob = fbm3(P * vec3(0.115, 0.20, 0.085));
+  float blob2 = fbm3(P * vec3(0.30, 0.38, 0.22) + 11.0);
+  float camo = smoothstep(0.478, 0.522, blob + 0.26 * (blob2 - 0.5));
   vec3 col = mix(dark, light, camo);
   // The upper surfaces of a Fulcrum are noticeably paler than its flanks.
-  col = mix(col, pale, smoothstep(0.25, 0.85, N.y) * (0.35 + 0.35 * camo));
+  col = mix(col, pale, smoothstep(0.25, 0.85, N.y) * (0.30 + 0.45 * camo));
   // Underside is near-uniform light grey.
   col = mix(col, pale * 1.05, smoothstep(-0.2, -0.75, N.y) * 0.85);
 
   // ---- markings -----------------------------------------------------------
+  // Placements measured from the model: fins span z -4.8..-0.7 and y 0.3..2.8 with
+  // their outer faces at |x| ~ 2.1; the wings run x 1.6..5.7; the forward fuselage
+  // flank sits around z 5..8.5.
   // Red star on the outer face of each fin.
-  float onFin = smoothstep(1.25, 1.55, ax) * smoothstep(-4.4, -5.0, P.z)
-              * (1.0 - smoothstep(-8.4, -9.0, P.z)) * smoothstep(1.1, 1.5, P.y) * step(0.55, abs(N.x));
+  float onFin = smoothstep(1.55, 1.80, ax) * step(0.55, abs(N.x))
+              * step(-4.80, P.z) * step(P.z, -0.70)
+              * step(0.45, P.y) * step(P.y, 2.80);
   if (onFin > 0.01) {
-    vec2 sp = vec2((P.z + 6.55) * sideSign, P.y - 2.55);
-    float star = starMask(sp * 1.0, 0.62);
-    col = mix(col, vec3(0.42, 0.030, 0.030), star * onFin * 0.95);
+    vec2 sp = vec2((P.z + 2.55) * sideSign, P.y - 1.80);
+    col = mix(col, vec3(0.40, 0.028, 0.028), starMask(sp, 0.62) * onFin * 0.95);
   }
-  // Red star on the upper wing surface, outboard.
-  float onWingTop = smoothstep(2.4, 3.0, ax) * (1.0 - smoothstep(5.0, 5.5, ax))
-                  * smoothstep(0.55, 0.85, N.y) * (1.0 - smoothstep(-1.4, -2.2, P.z));
+  // Red star on each upper wing surface, outboard of the flap.
+  float onWingTop = smoothstep(0.55, 0.80, N.y)
+                  * smoothstep(2.45, 2.85, ax) * (1.0 - smoothstep(5.20, 5.55, ax))
+                  * step(-3.10, P.z) * step(P.z, 0.90);
   if (onWingTop > 0.01) {
-    vec2 wp = vec2((ax - 3.9), (P.z + 0.55) * sideSign);
-    col = mix(col, vec3(0.42, 0.030, 0.030), starMask(wp, 0.60) * onWingTop * 0.9);
+    vec2 wp = vec2((ax - 3.95), (P.z + 1.10) * sideSign);
+    col = mix(col, vec3(0.40, 0.028, 0.028), starMask(wp, 0.66) * onWingTop * 0.92);
   }
-  // Bort number on both flanks of the forward fuselage, projected planar and flipped
-  // so it reads the right way round from either side.
-  float regU = (sideSign > 0.0 ? -P.z : P.z);
-  vec2 regUv = vec2((regU + 1.30) / 2.60, (P.y + 0.05) / 1.10);
-  float onNose = smoothstep(0.30, 0.55, ax) * (1.0 - smoothstep(1.35, 1.7, ax)) * step(0.45, abs(N.x));
-  if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0 && onNose > 0.5) {
-    float ink = texture2D(uRegMap, vec2(regUv.x, 1.0 - regUv.y)).a;
-    col = mix(col, vec3(0.46, 0.035, 0.035), ink * 0.94);
+  // Bort number on both flanks of the forward fuselage. The projection axis is flipped
+  // per side so the digits read nose-first from either beam, and the surface has to be
+  // facing sideways — without that test the number wraps over the spine.
+  float onFlank = step(0.55, abs(N.x)) * (1.0 - smoothstep(0.45, 0.70, abs(N.y)))
+                * step(ax, 1.45) * step(5.00, P.z) * step(P.z, 8.60);
+  if (onFlank > 0.5) {
+    // Projected planar on each flank with the axis reversed between them, so the digits
+    // read nose-first from either beam rather than mirrored on one side.
+    float regU = sideSign > 0.0 ? (8.45 - P.z) : (P.z - 5.05);
+    vec2 regUv = vec2(regU / 3.40, (P.y + 0.52) / 0.94);
+    if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0) {
+      float ink = texture2D(uRegMap, vec2(regUv.x, 1.0 - regUv.y)).a;
+      col = mix(col, vec3(0.44, 0.032, 0.032), ink * 0.94);
+    }
   }
 
   // ---- construction detail ------------------------------------------------
@@ -525,7 +538,9 @@ export function applyThermalMetal(material: THREE.MeshStandardMaterial) {
           vec3 P = vRootPos;
           // Oxide thickness: hottest at the throat, banded by the petal seams, with
           // some blotching from repeated heat cycles.
-          float aft = smoothstep(-6.4, -9.2, P.z);
+          // The nozzles on this airframe sit at z -5.0 to -5.75, with the surrounding
+          // structure heating from about z -3 aft.
+          float aft = smoothstep(-2.6, -5.5, P.z);
           float band = fbm3(P * vec3(0.5, 0.5, 3.2)) * 0.6 + fbm3(P * 9.0) * 0.4;
           float thick = clamp(aft * (0.35 + 1.15 * band), 0.0, 1.0);
           // Thin-film interference, approximated: straw -> violet -> blue -> grey.
@@ -538,7 +553,7 @@ export function applyThermalMetal(material: THREE.MeshStandardMaterial) {
           tint = mix(tint, c2, smoothstep(0.38, 0.68, thick));
           tint = mix(tint, c3, smoothstep(0.62, 0.92, thick));
           // Soot dulls the very hottest area near the exit plane.
-          float soot = smoothstep(-8.2, -9.4, P.z) * (0.4 + 0.6 * fbm3(P * 5.0));
+          float soot = smoothstep(-5.1, -5.8, P.z) * (0.4 + 0.6 * fbm3(P * 5.0));
           tint = mix(tint, vec3(0.055, 0.052, 0.050), soot * 0.6);
           diffuseColor.rgb = tint;
           vTmRough = clamp(0.22 + 0.45 * thick + 0.30 * soot, 0.08, 1.0);

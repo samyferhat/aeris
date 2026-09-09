@@ -70,11 +70,12 @@ BODY = [
     (11.00, 0.798, -0.978, 1.820, 0.75,  0.126, 0.42, 0.45, 0.40),
     (12.00, 0.748, -0.965, 1.815, 0.81,  0.124, 0.42, 0.45, 0.38),
     (13.00, 0.692, -0.930, 1.795, 0.87,  0.120, 0.40, 0.42, 0.35),
-    (13.90, 0.630, -0.860, 1.740, 0.92,  0.112, 0.35, 0.35, 0.30),
-    (14.35, 0.560, -0.700, 1.380, 0.94,  0.098, 0.20, 0.28, 0.25),
-    (14.75, 0.470, -0.430, 0.900, 0.95,  0.088, 0.08, 0.20, 0.20),
-    (15.05, 0.360, -0.170, 0.420, 0.96,  0.100, 0.02, 0.12, 0.15),
-    (15.25, 0.250,  0.030, 0.110, 0.96,  0.140, 0.00, 0.00, 0.10),
+    (13.45, 0.668, -0.905, 1.745, 0.90,  0.116, 0.38, 0.40, 0.32),
+    (13.90, 0.634, -0.790, 1.330, 0.93,  0.110, 0.25, 0.36, 0.30),
+    (14.45, 0.575, -0.500, 0.500, 0.95,  0.100, 0.06, 0.28, 0.26),
+    (14.85, 0.505, -0.280, 0.330, 0.96,  0.092, 0.01, 0.20, 0.22),
+    (15.15, 0.405, -0.060, 0.180, 0.96,  0.130, 0.00, 0.10, 0.18),
+    (15.35, 0.295,  0.110, 0.060, 0.96,  0.190, 0.00, 0.00, 0.12),
 ]
 
 NRING = 80
@@ -157,11 +158,11 @@ NAC = [(7.00, 0.520, -0.340, 0.980), (7.70, 0.620, -0.320, 1.020),
        (8.40, 0.690, -0.305, 1.050), (9.20, 0.725, -0.320, 1.070),
        (10.00, 0.740, -0.335, 1.085), (11.00, 0.738, -0.355, 1.092),
        (12.00, 0.724, -0.375, 1.098), (13.00, 0.700, -0.392, 1.100),
-       (13.80, 0.668, -0.405, 1.100), (14.35, 0.640, -0.415, 1.100),
-       (14.85, 0.612, -0.420, 1.100)]
+       (13.80, 0.668, -0.405, 1.100), (14.35, 0.638, -0.415, 1.100),
+       (14.85, 0.605, -0.420, 1.100)]
 NACS = cr_chain(NAC, 24)
 NSEG = 26
-BORE_S0, BORE_S1 = 13.30, 14.85
+BORE_S0, BORE_S1 = 14.42, 14.85
 NOZ_CZ = -0.420
 NOZ_CX = 1.100
 
@@ -181,36 +182,46 @@ for sgn in (1, -1):
     # rim: nacelle skin -> bore mouth
     last = NACS[-1]
     rim_o = circ_ring(last[3], last[2], last[1], last[0], sgn, NSEG, 0.06)
-    rim_i = circ_ring(NOZ_CX, NOZ_CZ, 0.578, BORE_S1, sgn, NSEG)
+    rim_i = circ_ring(NOZ_CX, NOZ_CZ, 0.535, BORE_S1, sgn, NSEG)
     fus._loft_world([rim_o, rim_i], True, False, False, 4)
     # bore running forward, closed by a turbine face
     bore = [circ_ring(NOZ_CX, NOZ_CZ, r, s, sgn, NSEG)
-            for (s, r) in ((BORE_S1, 0.582), (14.40, 0.586), (13.85, 0.590),
-                           (BORE_S0, 0.592))]
+            for (s, r) in ((BORE_S1, 0.535), (14.70, 0.541), (14.55, 0.545),
+                           (BORE_S0, 0.546))]
     fus._loft_world(bore, True, False, True, 4)
-    # flame holder cone + radial vanes just inside the bore
-    fus.cyl((sgn * NOZ_CX, BORE_S0 + 0.02, NOZ_CZ),
-            (sgn * NOZ_CX, BORE_S0 + 0.34, NOZ_CZ), 0.20, 0.13, 14, True, 4)
-    for i in range(8):
-        a = math.pi * i / 8
+    # dark backstop so the throat reads deep, then flame-holder hardware
+    fus.cyl((sgn * NOZ_CX, BORE_S0 + 0.004, NOZ_CZ),
+            (sgn * NOZ_CX, BORE_S0 + 0.030, NOZ_CZ), 0.545, 0.545, NSEG, True, 3)
+    fus.cyl((sgn * NOZ_CX, BORE_S0 + 0.03, NOZ_CZ),
+            (sgn * NOZ_CX, BORE_S0 + 0.30, NOZ_CZ), 0.190, 0.115, 16, True, 4)
+    # radial flame-holder gutters
+    for i in range(10):
+        a = math.pi * i / 10
         c, s_ = math.cos(a), math.sin(a)
-        fus.cyl((sgn * (NOZ_CX + 0.55 * c), BORE_S0 + 0.10, NOZ_CZ + 0.55 * s_),
-                (sgn * (NOZ_CX - 0.55 * c), BORE_S0 + 0.10, NOZ_CZ - 0.55 * s_),
-                0.020, 0.020, 6, True, 4)
-    fus.cyl((sgn * NOZ_CX, BORE_S0 + 0.30, NOZ_CZ),
-            (sgn * NOZ_CX, BORE_S0 + 0.60, NOZ_CZ), 0.30, 0.30, 16, True, 4)
+        fus.cyl((sgn * (NOZ_CX + 0.515 * c), BORE_S0 + 0.10, NOZ_CZ + 0.515 * s_),
+                (sgn * (NOZ_CX - 0.515 * c), BORE_S0 + 0.10, NOZ_CZ - 0.515 * s_),
+                0.024, 0.024, 6, True, 4)
+    # two concentric ring gutters
+    for (rr_, ss_) in ((0.455, 0.19), (0.290, 0.24)):
+        for i in range(20):
+            a0 = TAU * i / 20
+            a1 = TAU * (i + 1) / 20
+            fus.cyl((sgn * (NOZ_CX + rr_ * math.cos(a0)), BORE_S0 + ss_,
+                     NOZ_CZ + rr_ * math.sin(a0)),
+                    (sgn * (NOZ_CX + rr_ * math.cos(a1)), BORE_S0 + ss_,
+                     NOZ_CZ + rr_ * math.sin(a1)), 0.026, 0.026, 5, True, 4)
 
 # ---- tail booms -----------------------------------------------------------
-BOOM = [(8.60, 1.560, 0.040, 0.110, 0.08),
-        (9.50, 1.640, 0.150, 0.115, 0.30),
-        (10.50, 1.700, 0.215, 0.125, 0.42),
-        (11.50, 1.735, 0.235, 0.125, 0.45),
-        (12.50, 1.750, 0.235, 0.115, 0.44),
-        (13.40, 1.755, 0.228, 0.100, 0.41),
-        (14.30, 1.750, 0.208, 0.070, 0.35),
-        (15.00, 1.740, 0.170, 0.038, 0.27),
-        (15.60, 1.725, 0.108, 0.012, 0.16),
-        (16.05, 1.700, 0.022, 0.000, 0.035)]
+BOOM = [(8.60, 1.590, 0.040, 0.110, 0.08),
+        (9.50, 1.680, 0.150, 0.115, 0.30),
+        (10.50, 1.760, 0.210, 0.125, 0.42),
+        (11.50, 1.800, 0.225, 0.125, 0.45),
+        (12.50, 1.822, 0.220, 0.115, 0.44),
+        (13.60, 1.840, 0.200, 0.100, 0.40),
+        (14.45, 1.845, 0.180, 0.075, 0.33),
+        (15.10, 1.840, 0.150, 0.045, 0.25),
+        (15.65, 1.830, 0.098, 0.018, 0.15),
+        (16.05, 1.815, 0.020, 0.000, 0.032)]
 BOOMS = cr_chain(BOOM, 20)
 BSEG = 20
 for sgn in (1, -1):
@@ -284,12 +295,15 @@ fus.cyl((0.0, 8.40, BEACON_Z - 0.02), (0.0, 8.40, BEACON_Z + 0.070), 0.055, 0.03
 # gun fairing on the left LERX
 fus.box(0.44, 0.78, 4.85, 5.62, body_top_z(5.2, 0.62) - 0.01,
         body_top_z(5.2, 0.62) + 0.085, 0)
-# ventral fins / pylon stubs under the wing roots
+# wing pylons
 for sgn in (1, -1):
-    for xs in (0.90, 1.48):
-        fus.box(min(sgn * (xs - 0.09), sgn * (xs + 0.09)),
-                max(sgn * (xs - 0.09), sgn * (xs + 0.09)),
-                9.60, 10.55, -1.02, -0.90, 0)
+    for xs in (2.60, 3.55):
+        le_p, ch_p, z_p, _t = 0, 0, 0, 0
+        fus.box(min(sgn * (xs - 0.075), sgn * (xs + 0.075)),
+                max(sgn * (xs - 0.075), sgn * (xs + 0.075)),
+                8.30 + (xs - 1.55) * 0.90, 9.80 + (xs - 1.55) * 0.90,
+                0.128 - (xs - 1.55) / 4.13 * 0.098 - 0.28,
+                0.128 - (xs - 1.55) / 4.13 * 0.098 - 0.06, 0)
 
 FUS_MATS = [CAMO, M('Radome'), MBM, CD, M('Metal_Nozzle')]
 Fuselage = new_obj('Fuselage', fus, FUS_MATS)
@@ -358,7 +372,7 @@ set_origin(Aileron_L, 3.60, le + 0.730 * ch, z)
 finish(Aileron_L, bevel=0.004)
 
 # ================================================================ FINS =====
-F_X0, F_Z0 = 1.740, 0.455
+F_X0, F_Z0 = 1.825, 0.455
 F_H, F_DX = 2.287, 0.261
 F_LE_R, F_CH_R = 10.60, 3.80
 F_LE_T, F_CH_T = 13.10, 1.75
@@ -398,7 +412,7 @@ set_origin(Rudder_L, F_X0 + F_DX * 0.5, F_LE_R + 0.722 * F_CH_R - 0.31,
 finish(Rudder_L, bevel=0.004)
 
 # ========================================================= STABILATORS =====
-T_X0, T_X1 = 1.600, 3.890
+T_X0, T_X1 = 1.690, 3.890
 T_LE_R, T_CH_R = 13.28, 2.48
 T_LE_T, T_CH_T = 15.56, 0.74
 T_Z_R, T_Z_T = -0.060, -0.100
@@ -413,10 +427,10 @@ for i in range(12):
     sl = airfoil_slice(0.0, 1.0, 0.055, 17)
     rings.append([P(x, le + u * ch, zz + v * ch) for (u, v) in sl])
 mbst._loft_world(rings, True, True, True, 0)
-mbst.cyl((1.460, T_LE_R + 0.30 * T_CH_R, T_Z_R), (1.640, T_LE_R + 0.30 * T_CH_R, T_Z_R),
+mbst.cyl((1.545, T_LE_R + 0.30 * T_CH_R, T_Z_R), (1.730, T_LE_R + 0.30 * T_CH_R, T_Z_R),
          0.072, 0.072, 12, True, 0)
 Stabilator_L = new_obj('Stabilator_L', mbst, [CAMO])
-set_origin(Stabilator_L, 1.480, T_LE_R + 0.30 * T_CH_R, T_Z_R)
+set_origin(Stabilator_L, 1.565, T_LE_R + 0.30 * T_CH_R, T_Z_R)
 finish(Stabilator_L, bevel=0.005)
 
 # ============================================================ AIRBRAKE =====
@@ -474,8 +488,8 @@ def nozzle(sgn):
         a0 = TAU * p / NP + gap
         a1 = TAU * (p + 1) / NP - gap
         rings = []
-        for (s, ro, ri) in ((NOZ_S0, 0.622, 0.582), (NOZ_S0 + 0.24, 0.598, 0.560),
-                            (NOZ_S0 + 0.48, 0.564, 0.528), (NOZ_S1, 0.528, 0.496)):
+        for (s, ro, ri) in ((NOZ_S0, 0.618, 0.535), (NOZ_S0 + 0.24, 0.592, 0.518),
+                            (NOZ_S0 + 0.48, 0.558, 0.492), (NOZ_S1, 0.522, 0.462)):
             outer, inner = [], []
             for k in range(5):
                 a = lerp(a0, a1, k / 4)
@@ -501,7 +515,7 @@ CANH = [(3.60, 0.225, 0.775), (3.92, 0.395, 1.010), (4.28, 0.487, 1.160),
         (4.68, 0.532, 1.238), (5.10, 0.545, 1.262), (5.52, 0.532, 1.244),
         (5.92, 0.480, 1.172), (6.20, 0.382, 1.058), (6.42, 0.175, 0.925)]
 CANS = cr_chain(CANH, 22)
-CNX = 19
+CNX = 27
 
 
 def canopy_arc(s, hw, top_z, k=1.0):
@@ -529,15 +543,15 @@ for sgn in (1, -1):
     for (s, hw, tz) in CANS:
         x = sgn * hw
         zz = body_top_z(s, hw)
-        rings.append([P(x - 0.034, s, zz - 0.050), P(x + 0.034, s, zz - 0.050),
-                      P(x + 0.034, s, zz + 0.032), P(x - 0.034, s, zz + 0.032)])
+        rings.append([P(x - 0.030, s, zz - 0.048), P(x + 0.030, s, zz - 0.048),
+                      P(x + 0.030, s, zz + 0.026), P(x - 0.030, s, zz + 0.026)])
     mbfr._loft_world(rings, True, True, True, 0)
 for (idx, sgn_off) in ((0, +1), (6, -1), (len(CANS) - 1, -1)):
     s, hw, tz = CANS[idx]
-    th = 0.055
+    th = 0.038
     a0 = canopy_arc(s, hw, tz, 1.0)
     a1 = [(p[0], p[1] + sgn_off * th, p[2]) for p in a0]
-    b0 = canopy_arc(s, hw * 0.90, tz - (tz - body_top_z(s, hw)) * 0.10, 1.0)
+    b0 = canopy_arc(s, hw * 0.945, tz - (tz - body_top_z(s, hw)) * 0.055, 1.0)
     b1 = [(p[0], p[1] + sgn_off * th, p[2]) for p in b0]
     mbfr._loft_world([a0, a1], False, mat=0)
     mbfr._loft_world([a1, b1], False, mat=0)
@@ -568,10 +582,13 @@ for i in range(12):
     loop = inner + list(reversed(outer))
     rings.append([P(x, s, z) for (x, z) in loop])
 mbt._loft_world(rings, True, True, True, 0)
-# coaming above the panel
-mbt.add([P(-0.46, 4.28, 0.690), P(0.46, 4.28, 0.690), P(0.50, 4.60, 0.720),
-         P(-0.50, 4.60, 0.720), P(-0.46, 4.28, 0.640), P(0.46, 4.28, 0.640),
-         P(0.50, 4.60, 0.670), P(-0.50, 4.60, 0.670)],
+# forward bulkhead below the glare shield
+mbt.box(-0.548, 0.548, 4.030, 4.095, 0.040, 0.700, 0)
+# glare shield / coaming: seals the deck opening from the skin back to the panel
+mbt.add([P(-0.548, 4.030, 0.712), P(0.548, 4.030, 0.712),
+         P(0.518, 4.360, 0.732), P(-0.518, 4.360, 0.732),
+         P(-0.548, 4.030, 0.658), P(0.548, 4.030, 0.658),
+         P(0.518, 4.360, 0.678), P(-0.518, 4.360, 0.678)],
         [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5],
          [2, 3, 7, 6], [3, 0, 4, 7]], 0)
 Cockpit_Tub = new_obj('Cockpit_Tub', mbt, [CD])
@@ -583,43 +600,44 @@ mbp = MB()
 
 
 def panel_s(z):
-    return 4.560 - 0.20 * (z - 0.235) / 0.477
+    return 4.500 - 0.20 * (z - 0.280) / 0.440
 
 
-PC = [(0.455, 0.235), (-0.455, 0.235), (-0.455, 0.712), (0.455, 0.712)]
+PC = [(0.500, 0.280), (-0.500, 0.280), (-0.500, 0.720), (0.500, 0.720)]
 front = [P(x, panel_s(z), z) for (x, z) in PC]
 back = [P(x, panel_s(z) - 0.060, z) for (x, z) in PC]
 mbp.add(front + back,
         [[0, 1, 2, 3], [7, 6, 5, 4], [0, 4, 5, 1], [1, 5, 6, 2],
          [2, 6, 7, 3], [3, 7, 4, 0]], 0)
-for (gx, gz, gr) in [(0.325, 0.612, 0.055), (0.190, 0.612, 0.055),
-                     (-0.190, 0.612, 0.055), (-0.325, 0.612, 0.055),
-                     (0.325, 0.468, 0.055), (0.190, 0.468, 0.055),
-                     (-0.190, 0.468, 0.055), (-0.325, 0.468, 0.055),
-                     (0.325, 0.324, 0.055), (0.190, 0.324, 0.055),
-                     (-0.190, 0.324, 0.055), (-0.325, 0.324, 0.055),
-                     (0.058, 0.612, 0.048), (-0.058, 0.612, 0.048)]:
+for (gx, gz, gr) in [(0.365, 0.640, 0.058), (0.228, 0.640, 0.058),
+                     (-0.228, 0.640, 0.058), (-0.365, 0.640, 0.058),
+                     (0.365, 0.500, 0.058), (0.228, 0.500, 0.058),
+                     (-0.228, 0.500, 0.058), (-0.365, 0.500, 0.058),
+                     (0.365, 0.360, 0.058), (0.228, 0.360, 0.058),
+                     (-0.228, 0.360, 0.058), (-0.365, 0.360, 0.058),
+                     (0.062, 0.645, 0.050), (-0.062, 0.645, 0.050),
+                     (0.100, 0.335, 0.044), (-0.100, 0.335, 0.044)]:
     s = panel_s(gz)
-    mbp.cyl((gx, s - 0.040, gz), (gx, s, gz), gr, gr, 20, True, 0)
-    mbp.cyl((gx, s + 0.0040, gz), (gx, s + 0.0058, gz), gr * 0.84, gr * 0.84, 20, True, 1)
-mbp.box(-0.118, 0.118, panel_s(0.42) - 0.025, panel_s(0.42) + 0.002, 0.296, 0.522, 0)
-mbp.box(-0.100, 0.100, panel_s(0.42) + 0.002, panel_s(0.42) + 0.007, 0.312, 0.506, 1)
+    mbp.cyl((gx, s - 0.045, gz), (gx, s + 0.030, gz), gr, gr, 20, True, 0)
+    mbp.cyl((gx, s + 0.0350, gz), (gx, s + 0.0368, gz), gr * 0.84, gr * 0.84, 20, True, 1)
+mbp.box(-0.120, 0.120, panel_s(0.47) - 0.025, panel_s(0.47) + 0.040, 0.400, 0.578, 0)
+mbp.box(-0.102, 0.102, panel_s(0.47) + 0.040, panel_s(0.47) + 0.045, 0.416, 0.562, 1)
 for sgn in (1, -1):
-    mbp.box(min(sgn * 0.392, sgn * 0.452), max(sgn * 0.392, sgn * 0.452),
-            panel_s(0.26) + 0.001, panel_s(0.26) + 0.009, 0.246, 0.292, 2)
+    mbp.box(min(sgn * 0.420, sgn * 0.490), max(sgn * 0.420, sgn * 0.490),
+            panel_s(0.30) + 0.020, panel_s(0.30) + 0.028, 0.288, 0.334, 2)
 # HUD housing
-mbp.box(-0.168, 0.168, 4.245, 4.445, 0.700, 0.790, 0)
-mbp.box(-0.148, 0.148, 4.285, 4.405, 0.790, 0.818, 0)
+mbp.box(-0.168, 0.168, 4.140, 4.320, 0.712, 0.802, 0)
+mbp.box(-0.148, 0.148, 4.170, 4.290, 0.802, 0.830, 0)
 Panel = new_obj('Panel', mbp, [CD, GF, WS])
-set_origin(Panel, 0.0, 4.50, 0.40)
+set_origin(Panel, 0.0, 4.42, 0.42)
 finish(Panel, bevel=0.003, angle=R(45))
 
 mbh = MB()
-mbh.add([P(-0.148, 4.238, 0.740), P(0.148, 4.238, 0.740),
-         P(0.148, 4.182, 0.952), P(-0.148, 4.182, 0.952)],
+mbh.add([P(-0.148, 4.150, 0.752), P(0.148, 4.150, 0.752),
+         P(0.148, 4.092, 0.968), P(-0.148, 4.092, 0.968)],
         [[0, 1, 2, 3], [3, 2, 1, 0]], 0)
 HUD_Glass = new_obj('HUD_Glass', mbh, [M('HUD_Glass')])
-set_origin(HUD_Glass, 0.0, 4.24, 0.74)
+set_origin(HUD_Glass, 0.0, 4.15, 0.752)
 finish(HUD_Glass, bevel=0.0, smooth=False)
 
 for sgn, nm in ((1, 'Console_L'), (-1, 'Console_R')):
@@ -765,14 +783,14 @@ finish(Gear_L, bevel=0.004)
 Wheel_L = wheel('Wheel_L', MAX_ + 0.125, MAS, MAZ, 0.350, 0.230)
 
 mbd = MB()
-mbd.box(0.278, 0.318, 5.95, 7.00, -0.96, -0.62, 0)
+mbd.box(0.268, 0.308, 5.92, 7.05, -1.02, -0.62, 0)
 GearDoor_Nose = new_obj('GearDoor_Nose', mbd, [CAMO])
-set_origin(GearDoor_Nose, 0.298, 6.475, -0.62)
+set_origin(GearDoor_Nose, 0.288, 6.485, -0.62)
 finish(GearDoor_Nose, bevel=0.004)
 GearDoor_Nose.rotation_euler = (0, R(-28), 0)
 
 mbd2 = MB()
-mbd2.box(1.310, 1.350, 9.62, 11.00, -1.02, -0.62, 0)
+mbd2.box(1.300, 1.340, 9.55, 11.10, -1.10, -0.62, 0)
 GearDoor_L = new_obj('GearDoor_L', mbd2, [CAMO])
 set_origin(GearDoor_L, 1.330, 10.31, -0.62)
 finish(GearDoor_L, bevel=0.004)
@@ -816,7 +834,7 @@ for i, sl in enumerate(wr.data.materials):
 Mig29 = empty('Mig29', 0, S0, 0, 1.0)
 Cockpit = empty('Cockpit', 0, S0, 0, 0.4)
 E = {}
-E['Camera_Pilot'] = empty('Camera_Pilot', 0.0, 4.980, 1.020, 0.10)
+E['Camera_Pilot'] = empty('Camera_Pilot', 0.0, 5.120, 1.045, 0.10)
 E['Nozzle_Exit_L'] = empty('Nozzle_Exit_L', NOZ_CX, NOZ_S1, NOZ_CZ, 0.20)
 E['Nozzle_Exit_R'] = empty('Nozzle_Exit_R', -NOZ_CX, NOZ_S1, NOZ_CZ, 0.20)
 E['Wingtip_L'] = empty('Wingtip_L', 5.690, 11.95, 0.030, 0.10)

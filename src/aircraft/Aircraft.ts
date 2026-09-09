@@ -11,8 +11,12 @@ import { clamp, lerp } from '../core/Noise';
 
 const deg = THREE.MathUtils.degToRad;
 const _tmpN = new THREE.Vector3();
+const _q = new THREE.Quaternion();
 
 /** Materials that live inside the cabin and need extra ambient to read at all. */
+/** Materials on genuinely two-sided geometry: thin plates seen from both faces. */
+const DOUBLE_SIDED = new Set(['Warning_Stripe', 'Gauge_Faces', 'Seat_Fabric']);
+
 const INTERIOR_MATERIALS = new Set([
   'Cockpit_Carpet', 'Cockpit_Trim', 'Cockpit_Plastic', 'Gauge_Faces',
   'Cockpit_Metal_Worn', 'Leather_Seat',
@@ -36,6 +40,7 @@ export class Aircraft extends THREE.Group {
   private wheelSpin = [0, 0, 0];
   private airbrake = 0;
   private grille = 0;
+  private doorState: Record<string, number> = {};
   materials: THREE.Material[] = [];
   glass: THREE.Mesh | null = null;
   instruments: Instruments | InstrumentsSoviet | null = null;
@@ -122,6 +127,11 @@ export class Aircraft extends THREE.Group {
             replacement = std;
           } else {
             replacement = std;
+          }
+          // Blender exports everything double-sided; only the glass and the thin
+          // control surfaces actually need it.
+          if (!(replacement as THREE.Material).transparent && !DOUBLE_SIDED.has(m.name)) {
+            (replacement as THREE.MeshStandardMaterial).side = THREE.FrontSide;
           }
           if ((replacement as THREE.ShaderMaterial).isShaderMaterial !== true) applyAerialPerspective(replacement);
           patched.set(m, replacement);
@@ -278,17 +288,19 @@ export class Aircraft extends THREE.Group {
     set('Flap_R', X, -deg(30) * fm.flaps);
 
     // --- fighter surfaces --------------------------------------------------
-    // All-moving stabilators: symmetric for pitch, differential for roll assist, which
-    // is where most of a Fulcrum's roll authority actually comes from at speed.
+    // On this model a positive rotation about local +X lifts a trailing edge, so a
+    // nose-up command has to drive the stabilators negative. Differential deflection
+    // adds roll, which is where most of a Fulcrum's roll authority comes from at speed.
     const roll = fm.aileron;
-    set('Stabilator_L', X, deg(18) * fm.elevator - deg(7) * roll);
-    set('Stabilator_R', X, deg(18) * fm.elevator + deg(7) * roll);
+    set('Stabilator_L', X, -deg(18) * fm.elevator + deg(7) * roll);
+    set('Stabilator_R', X, -deg(18) * fm.elevator - deg(7) * roll);
     set('Rudder_L', Y, deg(22) * fm.rudder);
     set('Rudder_R', Y, deg(22) * fm.rudder);
-    // Leading-edge slats schedule with angle of attack, as the real ones do.
+    // Leading-edge slats schedule with angle of attack, as the real ones do; they
+    // droop, which on this model is a negative rotation.
     const slat = clamp(fm.state.alpha / 0.30, 0, 1) * (1 - 0.5 * clamp(fm.state.mach - 0.7, 0, 1));
-    set('Slat_L', X, deg(18) * slat);
-    set('Slat_R', X, deg(18) * slat);
+    set('Slat_L', X, -deg(18) * slat);
+    set('Slat_R', X, -deg(18) * slat);
     // Airbrake: out whenever the throttle is closed and there is speed to kill.
     const brakeOut = clamp((0.22 - fm.state.throttle) * 5, 0, 1) * clamp((fm.state.airspeed - 60) / 60, 0, 1);
     this.airbrake = lerp(this.airbrake, fm.state.onGround && fm.state.groundSpeed > 20 ? 1 : brakeOut, 1 - Math.exp(-dt * 2.5));
@@ -312,33 +324,33 @@ export class Aircraft extends THREE.Group {
 
     // --- retractable gear ---------------------------------------------------
     if (this.config?.retractableGear) {
-      const g = fm.state.gear;
-      // Doors lead the legs and close behind them, so the sequence reads properly.
-      const door = clamp(g < 0.5 ? g * 2.4 : (1 - g) * 2.4 + 0.0, 0, 1);
-      const doorOpen = g > 0.02 && g < 0.98 ? 1 : (g > 0.98 ? 0.12 : 0);
+      const g = fm.state.gear;   // 1 down and locked, 0 up
+      // Retraction angles measured from the model: the nose leg swings forward and up,
+      // the mains fold inboard.
       const legs: [string, THREE.Vector3, number][] = [
-        // Nose leg swings forward into its bay; the mains fold inboard.
-        ['Gear_Nose', X, deg(-95)],
-        ['Gear_L', Z, deg(88)],
-        ['Gear_R', Z, deg(-88)],
+        ['Gear_Nose', X, deg(-70)],
+        ['Gear_L', Z, deg(-102)],
+        ['Gear_R', Z, deg(102)],
       ];
       for (const [name, axis, angle] of legs) {
         const part = this.parts[name], rest = this.rest[name];
         if (!part || !rest) continue;
-        part.quaternion.copy(rest.quat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle * (1 - g)));
-        part.visible = g > 0.001;
+        part.quaternion.copy(rest.quat).multiply(_q.setFromAxisAngle(axis, angle * (1 - g)));
+        part.visible = g > 0.004;
       }
-      const doors: [string, THREE.Vector3, number][] = [
-        ['GearDoor_Nose', X, deg(85)], ['GearDoor_L', Z, deg(-80)], ['GearDoor_R', Z, deg(80)],
-      ];
-      for (const [name, axis, angle] of doors) {
+      // The doors are modelled open, so identity closes them. They lead the legs out and
+      // shut behind them: open while the gear is travelling, and again while it is down.
+      const doorOpen = g > 0.995 ? 1 : (g < 0.005 ? 0 : 1);
+      for (const name of ['GearDoor_Nose', 'GearDoor_L', 'GearDoor_R']) {
         const part = this.parts[name], rest = this.rest[name];
         if (!part || !rest) continue;
-        part.quaternion.copy(rest.quat).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle * Math.max(doorOpen, 1 - g > 0.02 ? doorOpen : 0)));
+        this.doorState[name] = lerp(this.doorState[name] ?? 1, doorOpen, 1 - Math.exp(-dt * 3));
+        part.quaternion.identity().slerp(rest.quat, this.doorState[name]);
       }
-      // Intake grilles close on the ground to keep debris out of the compressors.
-      const grille = fm.state.onGround && fm.state.groundSpeed < 40 ? 1 : 0;
-      this.grille = lerp(this.grille, grille, 1 - Math.exp(-dt * 1.4));
+      // Intake grilles drop across the ducts on the ground to keep debris out of the
+      // compressors; they retract up into the duct once rolling.
+      const wantGrille = fm.state.onGround && fm.state.groundSpeed < 40 ? 1 : 0;
+      this.grille = lerp(this.grille, wantGrille, 1 - Math.exp(-dt * 1.4));
       set('IntakeGrille_L', X, deg(-70) * (1 - this.grille));
       set('IntakeGrille_R', X, deg(-70) * (1 - this.grille));
     }

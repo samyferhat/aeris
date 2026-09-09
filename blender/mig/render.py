@@ -98,6 +98,8 @@ ALL = {
     'tail':    ((4.5, 17.0, 1.2), (0.6, 5.0, -0.30), 50),
     'nose':    ((5.5, -13.0, 2.2), (0.0, -4.5, -0.20), 55),
     'cockpit': ((1.6, -8.0, 2.6), (0.0, -4.6, 0.55), 60),
+    'panel':   ((0.0, -4.10, 1.35), (0.0, -5.40, 0.52), 40),
+    'gear':    ((3.2, -3.2, -0.9), (1.2, 0.45, -1.35), 60),
 }
 if not which:
     which = list(ALL.keys())
@@ -106,7 +108,7 @@ for k in which:
     if k == 'pilot':
         e = bpy.data.objects['Camera_Pilot']
         p = e.matrix_world.translation
-        look((p.x, p.y, p.z), (p.x, p.y - 6.0, p.z - 0.62), 20)
+        look((p.x, p.y, p.z), (p.x, p.y - 6.0, p.z - 1.95), 24)
         sc.render.filepath = os.path.join(SHOTS, 'pilot.png')
         bpy.ops.render.render(write_still=True)
         print('SHOT pilot')

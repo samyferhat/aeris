@@ -223,6 +223,49 @@ def new_obj(name, mb, mats):
     return ob
 
 
+def _island_volume(faces):
+    v = 0.0
+    for f in faces:
+        vs = f.verts[:]
+        a = vs[0].co
+        for i in range(1, len(vs) - 1):
+            b = vs[i].co
+            c = vs[i + 1].co
+            v += a.dot(b.cross(c)) / 6.0
+    return v
+
+
+def fix_orientation(bm):
+    """recalc_face_normals gets confused by overlapping shells; re-check each
+    connected island by signed volume and flip the ones that came out inside-out."""
+    bm.faces.ensure_lookup_table()
+    seen = set()
+    for f0 in bm.faces:
+        if f0.index in seen:
+            continue
+        stack = [f0]
+        seen.add(f0.index)
+        isl = []
+        nman = 0
+        etot = 0
+        while stack:
+            cf = stack.pop()
+            isl.append(cf)
+            for e in cf.edges:
+                etot += 1
+                if len(e.link_faces) != 2:
+                    nman += 1
+                for nf in e.link_faces:
+                    if nf.index not in seen:
+                        seen.add(nf.index)
+                        stack.append(nf)
+        if etot == 0 or nman / float(etot) > 0.10:
+            continue                      # open / messy shell: leave alone
+        vol = _island_volume(isl)
+        if vol < -1e-6:
+            bmesh.ops.reverse_faces(bm, faces=isl)
+
+
 def clean(ob, dist=0.0006):
     me = ob.data
     bm = bmesh.new()
@@ -231,6 +274,7 @@ def clean(ob, dist=0.0006):
     # kill degenerate faces
     bmesh.ops.dissolve_degenerate(bm, dist=1e-5, edges=bm.edges)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    fix_orientation(bm)
     bm.to_mesh(me)
     bm.free()
     me.update()
@@ -310,6 +354,7 @@ def empty(name, x, s, z, size=0.15):
 
 
 def parent_to(child, par):
+    bpy.context.view_layer.update()
     child.parent = par
     child.matrix_parent_inverse = par.matrix_world.inverted()
 

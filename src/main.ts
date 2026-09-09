@@ -137,6 +137,8 @@ async function boot() {
     environment.invalidate();
     runway.setNight(atmosphere.night);
     post.sunColor.copy(atmosphere.sunColor).multiplyScalar(smoothstepJS(-0.05, 0.1, atmosphere.sunElevation));
+    // Aim the metering lower once the sun is down, so night reads as night.
+    post.exposureKey = 0.15 + 0.29 * smoothstepJS(-0.14, 0.10, atmosphere.sunElevation);
   };
   timeSlider.onChange = applyTime;
   applyTime(atmosphere.hour);
