@@ -82,7 +82,9 @@ export class Pipeline {
   cloudDensity = { bias: 0.82, slope: 0.75, scale: 1.0 };
   cloudBase = 950; cloudTop = 1750;
   dofEnabled = false;
-  motionBlur = 0.35;
+  // A still taken at random has to pass for a photograph, and a photograph of an island
+  // from an aeroplane is not smeared. Enough to carry speed, not enough to see in a frame.
+  motionBlur = 0.18;
   time = 0;
   sunScreen = new THREE.Vector2(0.5, 0.5);
   sunVisible = 0;

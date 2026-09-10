@@ -4,13 +4,25 @@ import { applyAerialPerspective } from '../sky/AerialPerspective';
 import oceanChunk from '../shaders/ocean.glsl?raw';
 import { SimplexNoise } from '../core/Noise';
 
-const NEAR_SIZE = 9000, NEAR_SEGS = 400, FAR_SIZE = 140000;
+// The near grid has to resolve the swell it displaces: below about four quads per
+// wavelength a Gerstner wave stops being a wave and becomes a pattern aligned with the
+// mesh. At 11.7 m a quad, the two geometry components have seven and four.
+const NEAR_SIZE = 6000, NEAR_SEGS = 512, FAR_SIZE = 140000;
 
+/**
+ * The sea: one material on two meshes — a displaced grid that follows the camera, and a
+ * ring that carries the same shading out to the horizon.
+ *
+ * Everything about how it looks lives in shaders/ocean.glsl. What is here is the
+ * geometry, the noise the bottom is made of, and the wind.
+ */
 export class Ocean extends THREE.Group {
   readonly material: THREE.MeshStandardMaterial;
   private near: THREE.Mesh;
   private far: THREE.Mesh;
-  private uniforms: Record<string, THREE.IUniform>;
+  readonly uniforms: Record<string, THREE.IUniform>;
+  /** Direction the swell runs towards. The vegetation leans the same way. */
+  readonly wind = new THREE.Vector2(0.83, 0.56).normalize();
 
   constructor(hf: Heightfield) {
     super();
@@ -19,11 +31,13 @@ export class Ocean extends THREE.Group {
       tHeight: { value: hf.texture },
       uWorldSize: { value: WORLD_SIZE },
       tDetailN: { value: Ocean.makeDetailNormal() },
-      tFoam: { value: Ocean.makeFoam() },
+      tBed: { value: Ocean.makeBedNoise() },
       uWaveScale: { value: 1.0 },
-      uShallowColor: { value: new THREE.Color(0x2aa8a4).convertSRGBToLinear() },
-      uDeepColor: { value: new THREE.Color(0x06304f).convertSRGBToLinear() },
-      uSandColor: { value: new THREE.Color(0xb9a77a).convertSRGBToLinear() },
+      uWind: { value: this.wind },
+      // Scattering colour of the water body. Deep water is this, and nothing else:
+      // by thirty metres the extinction has removed everything the bottom sent back.
+      uWaterTint: { value: new THREE.Color(0x0d4a60).convertSRGBToLinear() },
+      uGlitter: { value: 0.42 },
     };
     this.material = this.makeMaterial();
     const nearGeo = new THREE.PlaneGeometry(NEAR_SIZE, NEAR_SIZE, NEAR_SEGS, NEAR_SEGS);
@@ -46,7 +60,7 @@ export class Ocean extends THREE.Group {
   }
 
   private makeMaterial(): THREE.MeshStandardMaterial {
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.12, metalness: 0.0, envMapIntensity: 1.0 });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.06, metalness: 0.0, envMapIntensity: 1.0 });
     (mat as any)._apKey = 'ocean';
     applyAerialPerspective(mat, (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
@@ -59,50 +73,130 @@ export class Ocean extends THREE.Group {
           // plane reaches exactly eye level and paints a bright strip over the band of
           // sky the atmosphere shader (which does use a round planet) expects to see.
           wp0.y -= camDist * camDist / (2.0 * 6371000.0);
-          vOFade = 1.0 - smoothstep(1500.0, 4000.0, camDist);
-          vec3 oDisp, oN; float oCrest;
-          gerstner(wp0, uWaveScale * vOFade, oDisp, oN, oCrest);
+          // Beyond this the grid is coarser than the shortest wave, so the displacement
+          // is faded out rather than sampled into aliasing.
+          vOFade = 1.0 - smoothstep(1400.0, 2900.0, camDist);
+          vODepth = max(0.0, -terrainHeightAt(wp0.xz));
+          // Shoaling has to change slowly across the grid. Tied tightly to the depth
+          // under each vertex it varies within one twenty-metre quad, the wave field
+          // stops being continuous, and the lagoon fills with a visible checkerboard.
+          float oShoal = smoothstep(0.4, 11.0, vODepth);
+          float oShelter = shelterAt(wp0.xz);
+          vOShelter = oShelter;
+          vec3 oDisp, oN; float oCrest, oPhase;
+          gerstner(wp0, uWaveScale * vOFade, oShoal, oShelter, oDisp, oN, oCrest, oPhase);
+          // The surface may not go below the bottom. Without this the trough of a wave
+          // dips under the reef crest and the terrain pokes through in triangles.
+          oDisp.y = max(oDisp.y, (-vODepth + 0.12) - wp0.y);
           vec3 transformed = position + oDisp + vec3(0.0, wp0.y - (modelMatrix * vec4(position, 1.0)).y, 0.0);
           vOWaveNormal = mix(vec3(0.0, 1.0, 0.0), oN, vOFade);
           vOCrest = oCrest;
+          vOPhase = oPhase;
           vOWorldPos = wp0 + oDisp;`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);');
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', '#include <common>\n' + oceanChunk)
         .replace('#include <map_fragment>', `
           vec3 P = vOWorldPos;
+          vec3 V = normalize(cameraPosition - P);
           float dist = length(P - cameraPosition);
-          float detailFade = 1.0 - smoothstep(300.0, 2500.0, dist);
-          vec2 uvA = P.xz * 0.045 + vec2(uTime * 0.021, uTime * 0.013);
-          vec2 uvB = P.xz * 0.11 * mat2(0.6, 0.8, -0.8, 0.6) + vec2(-uTime * 0.03, uTime * 0.017);
-          vec2 uvC = P.xz * 0.008 + vec2(uTime * 0.004, -uTime * 0.006);
-          vec3 dn = (texture2D(tDetailN, uvA).rgb * 2.0 - 1.0) + (texture2D(tDetailN, uvB).rgb * 2.0 - 1.0) * 0.6 + (texture2D(tDetailN, uvC).rgb * 2.0 - 1.0) * 0.8;
-          vec3 wN = normalize(vOWaveNormal + vec3(dn.x, 0.0, dn.y) * 0.55 * detailFade);
-          // Fade micro-normals with distance to reduce specular aliasing
-          wN = normalize(mix(vec3(0.0, 1.0, 0.0), wN, mix(0.35, 1.0, detailFade)));
-          // Water depth from the terrain heightfield (refraction stand-in)
-          float depth = max(0.0, P.y - terrainHeightAt(P.xz));
-          float shallow = exp(-depth * 0.09);
-          float veryShallow = exp(-depth * 0.35);
-          vec3 waterCol = mix(uDeepColor, uShallowColor, shallow);
-          waterCol = mix(waterCol, uSandColor * 0.7, veryShallow * 0.85);
-          // Foam: shoreline, crests, breaking pattern
-          float foamTex = texture2D(tFoam, P.xz * 0.06 + vec2(uTime * 0.02, 0.0)).r;
-          float foamTex2 = texture2D(tFoam, P.xz * 0.025 - vec2(0.0, uTime * 0.015)).r;
-          float shoreFoam = smoothstep(0.55, 0.95, (1.0 - smoothstep(0.0, 4.5, depth)) * (0.55 + 0.6 * foamTex) + 0.25 * sin(uTime * 0.9 - depth * 1.3) * (1.0 - smoothstep(0.0, 8.0, depth)));
-          float crestFoam = smoothstep(0.78, 0.98, vOCrest * (0.7 + 0.5 * foamTex2)) * uWaveScale;
-          float foam = clamp(shoreFoam + crestFoam, 0.0, 1.0) * detailFade;
-          diffuseColor.rgb = mix(waterCol, vec3(0.85), foam);`)
+          float detailFade = 1.0 - smoothstep(420.0, 3400.0, dist);
+
+          // ---- surface -----------------------------------------------------
+          vec2 drift = uWind * uTime;
+          vec2 uvA = P.xz * 0.052 + drift * 0.021;
+          vec2 uvB = P.xz * 0.132 * mat2(0.6, 0.8, -0.8, 0.6) - drift * 0.033;
+          vec2 uvC = P.xz * 0.0092 + drift * 0.0055;
+          vec3 dn = (texture2D(tDetailN, uvA).rgb * 2.0 - 1.0)
+                  + (texture2D(tDetailN, uvB).rgb * 2.0 - 1.0) * 0.55
+                  + (texture2D(tDetailN, uvC).rgb * 2.0 - 1.0) * 0.85;
+          // Ripples flatten as the water thins out, and everything here is taken from the
+          // depth at the fragment rather than at the vertex, so the grid never shows.
+          float depth = max(0.0, -terrainHeightAt(P.xz));
+          float shoalF = smoothstep(0.4, 11.0, depth);
+          float ripple = 0.52 * detailFade * mix(0.28, 1.0, smoothstep(0.25, 3.0, depth));
+          // The chop: the four short components, as a slope, evaluated here.
+          float chopFade = 1.0 - smoothstep(900.0, 5200.0, dist);
+          vec2 slope = chopSlope(P.xz, uWaveScale, shoalF, vOShelter, chopFade);
+          vec3 wN = normalize(vOWaveNormal + vec3(-slope.x, 0.0, -slope.y) * 1.35
+                                           + vec3(dn.x, 0.0, dn.y) * ripple);
+          wN = normalize(mix(vec3(0.0, 1.0, 0.0), wN, mix(0.55, 1.0, detailFade)));
+
+          // ---- the bottom, seen through the surface -------------------------
+          vec3 Rr = refract(-V, wN, 0.7463);              // air into water, n = 1.34
+          float rdy = max(-Rr.y, 0.10);
+          vec2 hit = P.xz + Rr.xz * (depth / rdy);
+          hit = P.xz + Rr.xz * (max(0.0, -terrainHeightAt(hit)) / rdy);
+          float under = max(0.0, -terrainHeightAt(hit));
+          float pathDown = under / rdy;
+          float e = 26.0;
+          float sx = terrainHeightAt(hit + vec2(e, 0.0)) - terrainHeightAt(hit - vec2(e, 0.0));
+          float sz = terrainHeightAt(hit + vec2(0.0, e)) - terrainHeightAt(hit - vec2(0.0, e));
+          float bedSlope = 1.0 - 2.0 * e / sqrt(sx * sx + sz * sz + 4.0 * e * e);
+          vec3 bed = seaFloorAlbedo(hit, under, bedSlope) * caustics(hit, under);
+          // Down to the bottom with the sun, back up to the eye along the refracted ray.
+          float sunPath = min(under / max(uSunDir.y, 0.22), 110.0);
+          vec3 Tw = exp(-SIGMA * (pathDown + sunPath));
+          vec3 body = bed * Tw + uWaterTint * (1.0 - Tw);
+
+          // ---- surf ---------------------------------------------------------
+          // The phase is recomputed here rather than interpolated: the far ring's
+          // triangles are kilometres across and would smear the wave lines into mush.
+          float k0 = 2.0 * PI / 84.0;
+          float phase = k0 * (dot(uWind, P.xz) - sqrt(9.81 / k0) * uTime);
+          float Hs = 1.55 * uWaveScale;
+          float crestBand = smoothstep(-0.05, 0.88, sin(phase));
+          // A wave breaks where the bottom comes up under it, not simply where the water
+          // is shallow: without this second term the whole lagoon breaks at once and the
+          // reef reads as a wide white field instead of a line. Comparing the depth here
+          // with the depth a hundred metres to seaward finds the step that trips it.
+          float depthSea = max(0.0, -terrainHeightAt(P.xz - uWind * 130.0));
+          float rise = depthSea - depth;
+          float breakZone = smoothstep(2.6 * Hs, 0.6 * Hs, depth) * smoothstep(0.35, 2.0, rise);
+          float surf = breakZone * pow(crestBand, 2.2);
+          // Whitewater keeps running shorewards after the wave has broken.
+          float wash = smoothstep(0.85, 0.0, depth) * (0.30 + 0.70 * smoothstep(-0.7, 0.7, sin(phase - 1.3)));
+          // Whitecaps come in drifting patches, not on every crest, and the patches have
+          // to be a field in their own right: hung on the wave phase they line up with
+          // the mesh and read as a polka dot.
+          float capField = texture2D(tBed, P.xz * 0.0034 - drift * 0.0017).r * 0.55
+                         + texture2D(tBed, P.xz * 0.019 - drift * 0.0065).a * 0.45;
+          float caps = smoothstep(0.62, 0.86, capField) * smoothstep(6.0, 20.0, depth)
+                     * (1.0 - vOShelter) * uWaveScale * 0.55;
+          float fn = texture2D(tBed, P.xz * 0.0225 + drift * 0.004).a * 0.6
+                   + texture2D(tBed, P.xz * 0.108 - drift * 0.011).a * 0.4;
+          float foam = smoothstep(0.30, 0.80, (surf * 1.15 + wash * 0.9 + caps * 0.85) * (0.48 + 0.95 * fn));
+          foam *= mix(0.5, 1.0, detailFade);
+
+          // Fresnel takes the body colour away as the view goes grazing, which is when
+          // the sky reflection is all there is left of the sea.
+          float ndv = max(dot(wN, V), 0.02);
+          float Fw = 0.021 + 0.979 * pow(1.0 - ndv, 5.0);
+          diffuseColor.rgb = mix(body * (1.0 - Fw), vec3(0.70, 0.74, 0.76), foam);`)
         .replace('#include <normal_fragment_begin>', `
           float faceDirection = 1.0;
           vec3 normal = normalize(mat3(viewMatrix) * wN);
           vec3 nonPerturbedNormal = normal;`)
-        .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(roughness, 0.7, foam) + 0.35 * (1.0 - detailFade);')
+        .replace('#include <roughnessmap_fragment>', `
+          // Roughness grows with distance because a pixel a kilometre away holds a whole
+          // distribution of wave slopes; that is what draws the sun's glittering path.
+          float roughnessFactor = mix(0.045, 0.19, 1.0 - detailFade) + 0.55 * foam;`)
         .replace('#include <opaque_fragment>', `
-          // Sub-surface light: sun shining through wave crests when looking towards it.
-          vec3 V = normalize(cameraPosition - P);
-          float sss = pow(max(0.0, dot(V, -uSunDir + wN * 0.4)), 4.0) * vOCrest * (1.0 - foam) * 0.35 * uWaveScale;
-          outgoingLight += uShallowColor * sss * uSunIntensity * 0.12 * max(0.0, uSunDir.y);
+          // Sun through the back of a crest: the green translucence of a wave about to break.
+          float sss = pow(max(0.0, dot(V, -uSunDir + wN * 0.45)), 4.0) * vOCrest
+                    * (1.0 - foam) * uWaveScale * smoothstep(1.5, 8.0, depth);
+          outgoingLight += uWaterTint * vec3(0.9, 2.2, 1.7) * sss * uSunIntensity * 0.030 * max(0.0, uSunDir.y);
+          // The glittering path. A pixel of distant sea holds a whole distribution of
+          // wave slopes, so the sun's reflection in it is not a point but a road drawn
+          // towards the viewer: one GGX lobe whose width grows with the pixel footprint.
+          vec3 Hv = normalize(V + uSunDir);
+          float ndh = max(dot(wN, Hv), 0.0);
+          float ag = mix(0.030, 0.155, 1.0 - detailFade) + 0.45 * foam;
+          float a2 = ag * ag;
+          float den = ndh * ndh * (a2 - 1.0) + 1.0;
+          float ggx = a2 / (PI * den * den);
+          outgoingLight += uSunTransmit * uSunIntensity * Fw * ggx * uGlitter
+                         * smoothstep(-0.02, 0.12, uSunDir.y) * (1.0 - foam * 0.7);
           #include <opaque_fragment>`);
     });
     return mat;
@@ -132,18 +226,33 @@ export class Ocean extends THREE.Group {
     return t;
   }
 
-  static makeFoam(): THREE.DataTexture {
-    const N = 256, noise = new SimplexNoise(31), data = new Uint8Array(N * N * 4);
+  /**
+   * Everything the bottom and the surf are made of, in four channels of one texture:
+   * where the coral grows, where the seagrass grows, the smooth field the caustic net
+   * is differenced out of, and the high-frequency field that breaks the foam lines up
+   * so they never read as a repeating scallop.
+   */
+  static makeBedNoise(): THREE.DataTexture {
+    const N = 512, data = new Uint8Array(N * N * 4);
+    const na = new SimplexNoise(31), nb = new SimplexNoise(77), nc = new SimplexNoise(151), nd = new SimplexNoise(211);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const a = (i / N) * Math.PI * 2, b = (j / N) * Math.PI * 2;
-      const x = Math.cos(a) * 1.5, y = Math.sin(a) * 1.5, z = Math.cos(b) * 1.5, w = Math.sin(b) * 1.5;
-      let v = 0, amp = 1, f = 1;
-      for (let o = 0; o < 4; o++) { v += amp * Math.abs(noise.noise3D(x * f + w * f, y * f + z * f * 0.6, (w - x) * f)); amp *= 0.55; f *= 2.3; }
-      v = Math.pow(1 - Math.min(1, v * 0.9), 2.2);
-      const k = (j * N + i) * 4; data[k] = data[k + 1] = data[k + 2] = v * 255; data[k + 3] = 255;
+      const x = Math.cos(a) * 1.6, y = Math.sin(a) * 1.6, z = Math.cos(b) * 1.6, w = Math.sin(b) * 1.6;
+      const oct = (n: SimplexNoise, o: number, gain: number) => {
+        let v = 0, amp = 1, f = 1, norm = 0;
+        for (let k = 0; k < o; k++) { v += amp * n.noise3D(x * f + w * f * 0.6, y * f + z * f * 0.8, (z - x) * f); norm += amp; amp *= gain; f *= 2.15; }
+        return v / norm * 0.5 + 0.5;
+      };
+      const k = (j * N + i) * 4;
+      data[k] = oct(na, 4, 0.55) * 255;
+      data[k + 1] = oct(nb, 4, 0.5) * 255;
+      data[k + 2] = oct(nc, 3, 0.45) * 255;
+      // Ridged: the foam breakup wants filaments, not blobs.
+      data[k + 3] = Math.pow(1 - Math.abs(oct(nd, 4, 0.5) * 2 - 1), 1.6) * 255;
     }
-    const t = new THREE.DataTexture(data, N, N); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true;
-    t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true;
+    const t = new THREE.DataTexture(data, N, N);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = 4;
     return t;
   }
 }
