@@ -16,7 +16,7 @@ uniform sampler2D tForestD, tForestN;
 uniform sampler2D tCliffD, tCliffN;
 uniform sampler2D tSandD, tSandN;
 uniform sampler2D tScreeD, tScreeN;
-uniform sampler2D tMacro;
+uniform sampler2D tMacro;   // r: macro variation  g: canopy relief  b: spare field
 uniform float uSeaLevel;
 uniform float uGroundLift;
 varying vec3 vTWorldPos;
@@ -77,6 +77,33 @@ Layer sampleTriplanar(sampler2D D, sampler2D N, vec3 p, vec3 n, float scale, flo
   return l;
 }
 
+/**
+ * Re-tinting.
+ *
+ * The photographic sets this world is textured from were shot in a dry climate: the
+ * grass averages khaki and the forest averages brown. What they are good for is
+ * structure — the grain, the clumping, the relative light and shade — and none of that
+ * is in the hue. So each layer keeps its luminance, normalised around its own mean and
+ * put through a contrast curve, and is painted with the colour the place should be.
+ * `mean` is the linear luminance of the source set; `tint` is where it should land.
+ */
+vec3 retint(vec3 albedo, vec3 tint, float mean, float contrast) {
+  float l = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+  float v = pow(max(l / mean, 0.0), contrast);
+  // A little of the original chroma survives, which keeps the patchiness from reading
+  // as one flat colour with a noise field over it.
+  vec3 chroma = albedo / max(l, 1e-3);
+  return tint * v * mix(vec3(1.0), chroma, 0.22);
+}
+
+// Tropical volcanic island: wet forest on the flanks, coarse meadow in the clearings
+// and on the valley floors, dark basalt where the rock is bare, coral sand on the beach.
+const vec3 TINT_GRASS  = vec3(0.150, 0.205, 0.062);
+const vec3 TINT_FOREST = vec3(0.052, 0.093, 0.036);
+const vec3 TINT_CLIFF  = vec3(0.104, 0.096, 0.086);
+const vec3 TINT_SAND   = vec3(0.640, 0.570, 0.450);
+const vec3 TINT_SCREE  = vec3(0.150, 0.136, 0.120);
+
 vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   vec3 P = vTWorldPos;
   vec3 N = normalize(vTWorldNormal);
@@ -94,13 +121,16 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   float h = P.y - uSeaLevel;
 
   // --- layer weights -------------------------------------------------------
-  float wSand  = (1.0 - smoothstep(1.2, 4.5 + 3.0 * macro2, h)) * (1.0 - smoothstep(0.30, 0.5, slope));
-  float wCliff = smoothstep(0.26 + 0.10 * macro2, 0.46, slope);
-  float wScree = smoothstep(260.0 + 200.0 * macro, 520.0, h) * (1.0 - smoothstep(0.34, 0.52, slope));
-  float wForest = smoothstep(0.40, 0.68, macro + 0.22 * macro2 - 0.12)
-                * smoothstep(10.0, 45.0, h) * (1.0 - smoothstep(240.0, 430.0, h))
-                * (1.0 - smoothstep(0.22, 0.40, slope));
-  // Priority: cliff over everything, then sand, then scree, then forest, then grass.
+  // A wet volcanic island in the tropics. Forest is the default cover, not the
+  // exception: it climbs from just above the beach to the tree line and stops only
+  // where the ground is too steep to hold it or the macro field opens a clearing.
+  float wCliff = smoothstep(0.23 + 0.09 * macro2, 0.45, slope);
+  float wSand  = (1.0 - smoothstep(1.0, 3.6 + 3.4 * macro2, h)) * (1.0 - smoothstep(0.15, 0.33, slope));
+  float wScree = smoothstep(540.0 + 260.0 * macro, 880.0, h);
+  float wForest = smoothstep(5.0, 26.0, h) * (1.0 - smoothstep(580.0, 840.0, h))
+                * smoothstep(0.16, 0.44, macro * 0.60 + macro2 * 0.40)
+                * (1.0 - smoothstep(0.28, 0.48, slope));
+  // Priority: cliff over everything, then sand, then scree, then forest, then meadow.
   float rest = 1.0 - wCliff;
   wSand *= rest;    rest -= wSand;
   wScree *= max(rest, 0.0); rest -= wScree;
@@ -111,15 +141,18 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   vec3 planarN = vec3(0.0, 0.0, 1.0) * 0.0;  // accumulated tangent-space perturbation
   vec3 cliffN = N;
   if (wGrass > 0.02) { Layer l = samplePlanar(tGrassD, tGrassN, P.xz, 23.0, shade, mixNoise);
-    albedo += l.albedo * wGrass; rough += l.rough * wGrass; planarN += l.normal * wGrass; }
-  if (wForest > 0.02) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 17.0, shade, mixNoise);
-    albedo += l.albedo * wForest; rough += l.rough * wForest; planarN += l.normal * wForest; }
-  if (wSand > 0.02) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 13.0, shade * 1.1, mixNoise);
-    albedo += l.albedo * wSand; rough += l.rough * wSand; planarN += l.normal * wSand; }
+    albedo += retint(l.albedo, TINT_GRASS, 0.0548, 0.80) * wGrass; rough += l.rough * wGrass; planarN += l.normal * wGrass; }
+  if (wForest > 0.02) { Layer l = samplePlanar(tForestD, tForestN, P.xz, 15.0, shade, mixNoise);
+    albedo += retint(l.albedo, TINT_FOREST, 0.0876, 0.95) * wForest; rough += l.rough * wForest; planarN += l.normal * wForest; }
+  if (wSand > 0.02) { Layer l = samplePlanar(tSandD, tSandN, P.xz, 13.0, shade, mixNoise);
+    // Wet sand is about half as bright as dry sand, and the band where it is wet is
+    // the first metre and a half above the water.
+    vec3 c = retint(l.albedo, TINT_SAND, 0.1560, 0.70) * mix(0.48, 1.0, smoothstep(0.1, 1.8, h));
+    albedo += c * wSand; rough += mix(0.35, l.rough, smoothstep(0.1, 1.8, h)) * wSand; planarN += l.normal * wSand; }
   if (wScree > 0.02) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 25.0, shade, mixNoise);
-    albedo += l.albedo * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
-  if (wCliff > 0.02) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 27.0, shade, mixNoise);
-    albedo += l.albedo * wCliff; rough += l.rough * wCliff; cliffN = l.normal; }
+    albedo += retint(l.albedo, TINT_SCREE, 0.0655, 0.85) * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
+  if (wCliff > 0.02) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 24.0, shade, mixNoise);
+    albedo += retint(l.albedo, TINT_CLIFF, 0.1372, 0.95) * wCliff; rough += l.rough * wCliff; cliffN = l.normal; }
 
   // Normal detail fades out with distance so far hills do not shimmer.
   float nearFade = 1.0 - smoothstep(700.0, 2600.0, dist);
@@ -127,14 +160,30 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   vec3 worldN = normalize(N + vec3(planarN.x, 0.0, planarN.y) * 0.85 * planarW);
   worldN = normalize(mix(worldN, mix(N, cliffN, nearFade), wCliff));
 
-  // The source photographs are shot flat and read muddy under a physical sun, so the
-  // ground gets a gentle grade: lifted overall, greener where it is grassy, warmer and
-  // paler on scree, with slow large-scale variation for dry and lush patches.
-  albedo *= (0.90 + 0.22 * macro) * uGroundLift;
-  vec3 green = albedo * vec3(0.88, 1.16, 0.72);
-  albedo = mix(albedo, green, (wGrass + wForest * 0.7) * (0.35 + 0.4 * macro2));
-  albedo = mix(albedo, albedo * vec3(1.08, 1.02, 0.94), wScree * 0.5);
-  albedo = mix(albedo, albedo * vec3(1.06, 1.03, 0.98), wSand * 0.6);
+  // Canopy relief.
+  //
+  // Individual trees are only instanced for the first couple of kilometres; past that
+  // the forest has to be in the ground itself. What makes a canopy read from the air is
+  // not its colour, it is its lumpiness — crowns catching the sun on one side and
+  // shading the neighbour on the other — so a field at roughly the scale of a crown is
+  // turned into a slope and into its own ambient occlusion. It survives to the horizon,
+  // where the photographic normal maps have long been faded out.
+  if (wForest > 0.03) {
+    float e = 4.5;
+    float c0 = texture2D(tMacro, P.xz * 0.0090).g;
+    float cx = texture2D(tMacro, (P.xz + vec2(e, 0.0)) * 0.0090).g;
+    float cz = texture2D(tMacro, (P.xz + vec2(0.0, e)) * 0.0090).g;
+    float canopyFade = 1.0 - smoothstep(2600.0, 7000.0, dist);
+    float w = wForest * canopyFade;
+    worldN = normalize(worldN - vec3(cx - c0, 0.0, cz - c0) * (4.0 * w));
+    albedo *= mix(1.0, 0.78 + 0.42 * c0, w);
+  }
+
+  // Where the island is wetter it is greener, and it is wetter in the valleys and on
+  // the windward flanks; a slow field stands in for both.
+  float lush = 0.35 + 0.65 * macro3;
+  albedo = mix(albedo, albedo * vec3(0.82, 1.10, 0.78), (wForest + wGrass * 0.7) * lush * 0.45);
+  albedo *= uGroundLift;
   ao = 1.0;
   rough = clamp(rough * 1.05, 0.38, 1.0);
   return worldN;

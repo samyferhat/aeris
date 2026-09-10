@@ -10,7 +10,7 @@ import { mulberry32 } from '../core/Noise';
  * a soft alpha edge. A matching normal map is derived from the drawn coverage so the
  * cards catch the sun instead of reading as flat stickers.
  */
-export function makeLeafCluster(seed = 5, size = 512): { map: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
+export function makeLeafCluster(seed = 5, size = 512, crown = false): { map: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
   const rnd = mulberry32(seed);
   const c = document.createElement('canvas'); c.width = c.height = size;
   const g = c.getContext('2d')!;
@@ -25,11 +25,25 @@ export function makeLeafCluster(seed = 5, size = 512): { map: THREE.CanvasTextur
     g.fill(); g.restore();
   };
 
-  // Two canopy lobes so the card silhouette is not a single blob.
-  const clusters = [
-    { cx: size * 0.5, cy: size * 0.42, r: size * 0.36, n: 420 },
-    { cx: size * 0.5, cy: size * 0.72, r: size * 0.26, n: 240 },
-  ];
+  // Two silhouettes, for two jobs.
+  //
+  // The crossed cards of a near tree want a tall shape with a gap for the trunk. The
+  // distant card does not: it is turned to face the camera from wherever the aeroplane
+  // is, including from directly overhead, and a tall silhouette seen from above is a
+  // sliver — a hillside of them reads as hatching, not as forest. So the far card gets
+  // a crown: a rosette of lobes that stays round however it is turned.
+  const clusters = crown
+    ? [
+        { cx: size * 0.50, cy: size * 0.50, r: size * 0.30, n: 380 },
+        { cx: size * 0.33, cy: size * 0.38, r: size * 0.20, n: 190 },
+        { cx: size * 0.66, cy: size * 0.40, r: size * 0.19, n: 175 },
+        { cx: size * 0.40, cy: size * 0.68, r: size * 0.19, n: 175 },
+        { cx: size * 0.66, cy: size * 0.66, r: size * 0.17, n: 150 },
+      ]
+    : [
+        { cx: size * 0.5, cy: size * 0.42, r: size * 0.36, n: 420 },
+        { cx: size * 0.5, cy: size * 0.72, r: size * 0.26, n: 240 },
+      ];
   for (const cl of clusters) {
     for (let i = 0; i < cl.n; i++) {
       // Denser toward the middle, sparse and ragged at the rim.
@@ -45,9 +59,9 @@ export function makeLeafCluster(seed = 5, size = 512): { map: THREE.CanvasTextur
         `hsla(${hue}, ${sat}%, ${light}%, ${alpha})`);
     }
   }
-  // A few twigs poking out of the silhouette.
+  // A few twigs poking out of the silhouette. A crown seen from above shows none.
   g.strokeStyle = 'rgba(48, 38, 26, 0.85)'; g.lineWidth = size * 0.006;
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < (crown ? 0 : 22); i++) {
     const a = -Math.PI / 2 + (rnd() - 0.5) * 2.4;
     const r0 = size * 0.1, r1 = size * (0.24 + rnd() * 0.16);
     g.beginPath();

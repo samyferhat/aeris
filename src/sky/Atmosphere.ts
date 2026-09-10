@@ -81,8 +81,8 @@ export class Atmosphere {
     // Haze: strongest at dawn, then burns off.
     // A little standing haze at all hours: without it distant ridges sit flat against
     // the sea instead of receding, and the eye reads the island as a model.
-    atmoUniforms.uHazeAmount.value = lerp(0.20, 0.60, smoothstep(0.35, 0.0, Math.abs(this.hour - 6.5) / 4));
-    atmoUniforms.uMieCoeff.value = lerp(5.5e-6, 1.4e-5, smoothstep(0.2, -0.05, el));
+    atmoUniforms.uHazeAmount.value = lerp(0.07, 0.40, smoothstep(0.35, 0.0, Math.abs(this.hour - 6.5) / 4));
+    atmoUniforms.uMieCoeff.value = lerp(3.4e-6, 1.2e-5, smoothstep(0.2, -0.05, el));
     this.computeSunColor();
   }
 

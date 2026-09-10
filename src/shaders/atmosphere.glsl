@@ -89,7 +89,7 @@ vec3 scatter(vec3 ro, vec3 rd, float maxLen, vec3 sunDir, int steps, int lightSt
   // saturates instead of accumulating without bound.
   vec3 lost = vec3(1.0) - transmittance;
   vec3 msTint = mix(vec3(0.42, 0.55, 0.78), vec3(1.0), 0.62);
-  vec3 ms = lost * msTint * 0.020 * smoothstep(-0.14, 0.12, sunDir.y);
+  vec3 ms = lost * msTint * 0.0075 * smoothstep(-0.14, 0.12, sunDir.y);
   return uSunIntensity * (sumR * BETA_R * pR + sumM * betaM * pM + ms);
 }
 
@@ -134,7 +134,11 @@ vec3 aerialPerspective(vec3 color, vec3 worldPos, vec3 camPos) {
   float mu = dot(rd, uSunDir);
   vec3 S = uSunIntensity * uSunTransmit * (sigmaR * phaseRayleigh(mu) + sigmaM * phaseMie(mu, uMieG));
   vec3 inscat = S / max(sigmaT, vec3(1e-12)) * (vec3(1.0) - T);
-  inscat += (vec3(1.0) - T) * MS_TINT * uSunIntensity * 0.020 * smoothstep(-0.14, 0.12, uSunDir.y);
+  // The multiple-scattering term saturates at (1 - T), so over a twenty-kilometre map
+  // it reaches full strength on anything past a few kilometres. At the coefficient a
+  // nine-kilometre world could carry, that is brighter than sunlit ground, and every
+  // distant island turns to milk.
+  inscat += (vec3(1.0) - T) * MS_TINT * uSunIntensity * 0.0075 * smoothstep(-0.14, 0.12, uSunDir.y);
   return color * T + inscat;
 }
 

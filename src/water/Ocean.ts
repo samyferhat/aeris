@@ -60,7 +60,7 @@ export class Ocean extends THREE.Group {
   }
 
   private makeMaterial(): THREE.MeshStandardMaterial {
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.06, metalness: 0.0, envMapIntensity: 1.0 });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.06, metalness: 0.0, envMapIntensity: 0.62 });
     (mat as any)._apKey = 'ocean';
     applyAerialPerspective(mat, (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
@@ -140,22 +140,23 @@ export class Ocean extends THREE.Group {
           vec3 body = bed * Tw + uWaterTint * (1.0 - Tw);
 
           // ---- surf ---------------------------------------------------------
-          // The phase is recomputed here rather than interpolated: the far ring's
-          // triangles are kilometres across and would smear the wave lines into mush.
-          float k0 = 2.0 * PI / 84.0;
-          float phase = k0 * (dot(uWind, P.xz) - sqrt(9.81 / k0) * uTime);
+          // Swell refracts as it shoals: by the time it breaks its crests are parallel
+          // to the depth contours, whatever direction the wind sent it from. So the
+          // phase of the surf is taken from the depth itself rather than from a bearing.
+          // The lines then follow the reef exactly, and they run shorewards with time.
+          float lateral = (texture2D(tBed, P.xz * 0.0021 + 0.13).b - 0.5) * 4.6;
+          float surfPhase = uTime * 1.05 - depth * 1.30 + lateral;
+          float crestBand = smoothstep(-0.10, 0.92, sin(surfPhase));
           float Hs = 1.55 * uWaveScale;
-          float crestBand = smoothstep(-0.05, 0.88, sin(phase));
           // A wave breaks where the bottom comes up under it, not simply where the water
           // is shallow: without this second term the whole lagoon breaks at once and the
-          // reef reads as a wide white field instead of a line. Comparing the depth here
-          // with the depth a hundred metres to seaward finds the step that trips it.
+          // reef reads as a wide white field instead of a line.
           float depthSea = max(0.0, -terrainHeightAt(P.xz - uWind * 130.0));
           float rise = depthSea - depth;
           float breakZone = smoothstep(2.6 * Hs, 0.6 * Hs, depth) * smoothstep(0.35, 2.0, rise);
-          float surf = breakZone * pow(crestBand, 2.2);
+          float surf = breakZone * pow(crestBand, 2.0);
           // Whitewater keeps running shorewards after the wave has broken.
-          float wash = smoothstep(0.85, 0.0, depth) * (0.30 + 0.70 * smoothstep(-0.7, 0.7, sin(phase - 1.3)));
+          float wash = smoothstep(0.75, 0.0, depth) * (0.25 + 0.75 * smoothstep(-0.7, 0.7, sin(surfPhase - 1.5)));
           // Whitecaps come in drifting patches, not on every crest, and the patches have
           // to be a field in their own right: hung on the wave phase they line up with
           // the mesh and read as a polka dot.
@@ -163,10 +164,13 @@ export class Ocean extends THREE.Group {
                          + texture2D(tBed, P.xz * 0.019 - drift * 0.0065).a * 0.45;
           float caps = smoothstep(0.62, 0.86, capField) * smoothstep(6.0, 20.0, depth)
                      * (1.0 - vOShelter) * uWaveScale * 0.55;
-          float fn = texture2D(tBed, P.xz * 0.0225 + drift * 0.004).a * 0.6
-                   + texture2D(tBed, P.xz * 0.108 - drift * 0.011).a * 0.4;
-          float foam = smoothstep(0.30, 0.80, (surf * 1.15 + wash * 0.9 + caps * 0.85) * (0.48 + 0.95 * fn));
-          foam *= mix(0.5, 1.0, detailFade);
+          // Three decorrelated scales of filament noise, multiplied in rather than added:
+          // foam is torn, and a threshold on a smooth field gives a shape with an edge.
+          float fn = texture2D(tBed, P.xz * 0.0085 + drift * 0.003).a * 0.42
+                   + texture2D(tBed, P.xz * 0.041 - drift * 0.009).a * 0.34
+                   + texture2D(tBed, P.xz * 0.155 + drift * 0.021).a * 0.24;
+          float foam = smoothstep(0.34, 0.86, (surf * 1.2 + wash * 0.95 + caps * 0.9) * (0.20 + 1.50 * fn));
+          foam *= mix(0.55, 1.0, detailFade);
 
           // Fresnel takes the body colour away as the view goes grazing, which is when
           // the sky reflection is all there is left of the sea.

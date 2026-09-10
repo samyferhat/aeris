@@ -4,11 +4,12 @@ import { applyAerialPerspective } from '../sky/AerialPerspective';
 import { makeLeafCluster, makeBark } from './Foliage';
 import { mulberry32, SimplexNoise, smoothstep, clamp } from '../core/Noise';
 
-const CHUNK = 260;            // metres per vegetation chunk
-const RADIUS = 5;             // chunks around the camera
-const PER_CHUNK = 130;        // candidate trees per chunk before filtering
-const NEAR_DIST = 900;        // full 3D trees inside this range
-const FAR_DIST = 2400;        // billboards out to here
+const CHUNK = 380;            // metres per vegetation chunk
+const RADIUS = 6;             // chunks around the camera
+const SPACING = 6.2;          // metres between candidate trees on the jittered grid
+const NEAR_DIST = 780;        // full 3D trees inside this range
+const FAR_DIST = 2500;        // billboards out to here
+const BUILD_BUDGET = 3;       // chunks built per frame; the rest wait in the queue
 
 /**
  * Instanced vegetation streamed around the camera.
@@ -23,7 +24,13 @@ export class Vegetation extends THREE.Group {
   private billboardGeo: THREE.BufferGeometry;
   private treeMat: THREE.MeshStandardMaterial;
   private billboardMat: THREE.MeshStandardMaterial;
-  private chunks = new Map<string, { near: THREE.InstancedMesh; far: THREE.InstancedMesh; count: number }>();
+  private chunks = new Map<string, { near: THREE.InstancedMesh; far: THREE.InstancedMesh; count: number } | null>();
+  /**
+   * Chunks waiting to be built. A chunk costs a few milliseconds, and crossing a
+   * boundary at three hundred knots asks for a couple of dozen at once; done in the
+   * frame they are asked for, that is a visible stutter every second and a half.
+   */
+  private queue: [number, number][] = [];
   private noise = new SimplexNoise(77);
   private time = { value: 0 };
   private windStrength = { value: 1.0 };
@@ -32,9 +39,10 @@ export class Vegetation extends THREE.Group {
   constructor(private hf: Heightfield) {
     super();
     const leaf = makeLeafCluster(5, 512);
+    const crown = makeLeafCluster(11, 512, true);
     const bark = makeBark(9, 256);
     this.treeMat = this.makeFoliageMaterial(leaf.map, leaf.normal, false);
-    this.billboardMat = this.makeFoliageMaterial(leaf.map, leaf.normal, true);
+    this.billboardMat = this.makeFoliageMaterial(crown.map, crown.normal, true);
     this.treeGeo = this.buildTreeGeometry(bark.map);
     this.billboardGeo = this.buildBillboardGeometry();
     this.frustumCulled = false;
@@ -44,30 +52,49 @@ export class Vegetation extends THREE.Group {
   private makeFoliageMaterial(map: THREE.Texture, normalMap: THREE.Texture, billboard: boolean) {
     const mat = new THREE.MeshStandardMaterial({
       map, normalMap, alphaTest: billboard ? 0.42 : 0.36, side: THREE.DoubleSide,
-      roughness: 0.86, metalness: 0.0, color: 0xffffff, vertexColors: !billboard,
+      roughness: 0.86, metalness: 0.0, color: 0x9ab27a, vertexColors: !billboard,
     });
     mat.normalScale.set(0.7, 0.7);
     (mat as any)._apKey = billboard ? 'vegBillboard' : 'vegTree';
     applyAerialPerspective(mat, (shader) => {
       shader.uniforms.uTime = this.time;
       shader.uniforms.uWind = this.windStrength;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vLeafTint;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vec3(vLeafTint * 0.94, vLeafTint, vLeafTint * 0.86);');
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           uniform float uTime; uniform float uWind;
           attribute float aSway;      // 0 at the trunk base, 1 at the canopy tips
-          attribute float aPhase;`)
+          attribute float aPhase;
+          varying float vLeafTint;
+          // Every instance shares one geometry and one texture, so without a per-instance
+          // variation a forest of them reads as a repeated stroke — the eye picks the
+          // shape out immediately and the hillside looks hatched. The instance's own
+          // position is the only thing that differs, so it is what the variation is
+          // hashed from: which way round the card is, and how dark its leaves are.
+          float leafHash(vec3 p) { return fract(sin(dot(p.xz, vec2(12.9898, 78.233))) * 43758.5453); }`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           #ifdef USE_INSTANCING
             vec3 instOrigin = instanceMatrix[3].xyz;
           #else
             vec3 instOrigin = vec3(0.0);
           #endif
+          float lh = leafHash(instOrigin);
+          vLeafTint = 0.72 + 0.52 * fract(lh * 7.31);
           ${billboard ? `
-          // Camera-facing card: rebuild the basis around the instance origin.
+          // Camera-facing card, rebuilt around the instance origin.
+          //
+          // Facing only about the vertical axis is the usual choice and it is wrong for
+          // an aeroplane: a vertical card looked down on from a thousand feet projects
+          // to a sliver, and a hillside of them reads as hatching rather than as trees.
+          // Tilting the card to face the camera fully turns each one back into a crown
+          // seen from above, which is what a canopy looks like from up there.
           vec3 camDir = normalize(cameraPosition - (modelMatrix * vec4(instOrigin, 1.0)).xyz);
           vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), camDir));
-          vec3 upv = vec3(0.0, 1.0, 0.0);
-          transformed = right * position.x + upv * position.y;
+          vec3 upv = normalize(cross(camDir, right));
+          float cw = 0.72 + 0.62 * fract(lh * 3.7);
+          transformed = right * (position.x * cw) + upv * (position.y - 4.6) + vec3(0.0, 4.6, 0.0);
           ` : ''}
           {
             float t = uTime;
@@ -80,7 +107,18 @@ export class Vegetation extends THREE.Group {
             transformed.x += (bend + flutter) * amp * 0.9;
             transformed.z += (bend * 0.6 - flutter * 0.5) * amp * 0.9;
             transformed.y -= abs(bend) * amp * 0.18;
-          }`);
+          }
+          #ifdef USE_INSTANCING
+            // Mirror half the cards. One bit, and the hatching is gone.
+            if (fract(lh * 19.7) > 0.5) {
+              #ifdef USE_MAP
+                vMapUv.x = 1.0 - vMapUv.x;
+              #endif
+              #ifdef USE_NORMALMAP
+                vNormalMapUv.x = 1.0 - vNormalMapUv.x;
+              #endif
+            }
+          #endif`);
     });
     return mat;
   }
@@ -157,18 +195,20 @@ export class Vegetation extends THREE.Group {
   /** Same forest test as the terrain shader, so trees only grow where the ground is forest. */
   private forestDensity(x: number, z: number): number {
     const h = this.hf.getHeight(x, z);
-    if (h < 8 || h > 430) return 0;
+    if (h < 6 || h > 820) return 0;
     for (const c of this.clearings) {
       const dx = x - c.x, dz = z - c.z;
       if (dx * dx + dz * dz < c.r * c.r) return 0;
     }
     const slope = this.hf.getSlope(x, z);
-    if (slope > 0.42) return 0;
+    if (slope > 0.48) return 0;
+    // Kept in step with the forest weight in shaders/terrain.glsl: a tree that grows
+    // on ground the shader has painted as meadow is a tree standing in a field.
     const macro = this.noise.fbm2D(x * 0.00035 * 6.2832, z * 0.00035 * 6.2832, 4) * 0.5 + 0.5;
     const macro2 = this.noise.fbm2D(x * 0.0021 * 6.2832 + 3, z * 0.0021 * 6.2832 + 1, 3) * 0.5 + 0.5;
-    let d = smoothstep(0.40, 0.70, macro + 0.22 * macro2 - 0.10);
-    d *= smoothstep(8, 42, h) * (1 - smoothstep(250, 430, h));
-    d *= 1 - smoothstep(0.24, 0.42, slope);
+    let d = smoothstep(0.16, 0.44, macro * 0.60 + macro2 * 0.40);
+    d *= smoothstep(6, 30, h) * (1 - smoothstep(560, 820, h));
+    d *= 1 - smoothstep(0.26, 0.46, slope);
     return d;
   }
 
@@ -180,13 +220,17 @@ export class Vegetation extends THREE.Group {
     const mats: THREE.Matrix4[] = [];
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), pos = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0), nrm = new THREE.Vector3();
-    for (let i = 0; i < PER_CHUNK; i++) {
-      const x = x0 + rnd() * CHUNK, z = z0 + rnd() * CHUNK;
+    // A jittered grid rather than uniform random: random scatter clumps and leaves
+    // holes at exactly the scale a canopy should be closed at.
+    const N = Math.round(CHUNK / SPACING);
+    for (let gi = 0; gi < N * N; gi++) {
+      const x = x0 + ((gi % N) + rnd()) * (CHUNK / N);
+      const z = z0 + ((gi / N | 0) + rnd()) * (CHUNK / N);
       const d = this.forestDensity(x, z);
       if (d <= 0.02 || rnd() > d) continue;
       const y = this.hf.getHeight(x, z);
-      if (y < 6) continue;
-      const scale = 0.65 + rnd() * 0.75;
+      if (y < 5) continue;
+      const scale = 0.75 + rnd() * rnd() * 1.35;
       // Lean slightly with the slope, keep a random heading.
       this.hf.getNormal(x, z, nrm);
       q.setFromUnitVectors(up, nrm.clone().lerp(up, 0.6).normalize());
@@ -195,7 +239,7 @@ export class Vegetation extends THREE.Group {
       pos.set(x, y - 0.35, z);
       mats.push(m.compose(pos, q, s).clone());
     }
-    if (mats.length === 0) { this.chunks.set(key, null as any); return; }
+    if (mats.length === 0) { this.chunks.set(key, null); return; }
     const mk = (geo: THREE.BufferGeometry, mat: THREE.Material) => {
       const inst = new THREE.InstancedMesh(geo, mat, mats.length);
       mats.forEach((mm, i) => inst.setMatrixAt(i, mm));
@@ -227,7 +271,16 @@ export class Vegetation extends THREE.Group {
           this.chunks.delete(key);
         }
       }
-      for (let j = -RADIUS; j <= RADIUS; j++) for (let i = -RADIUS; i <= RADIUS; i++) this.buildChunk(cx + i, cz + j);
+      // Nearest first, so what is about to be flown over exists before the far edge.
+      this.queue.length = 0;
+      for (let j = -RADIUS; j <= RADIUS; j++) for (let i = -RADIUS; i <= RADIUS; i++) {
+        if (!this.chunks.has(`${cx + i},${cz + j}`)) this.queue.push([cx + i, cz + j]);
+      }
+      this.queue.sort((a, b) => (Math.abs(a[0] - cx) + Math.abs(a[1] - cz)) - (Math.abs(b[0] - cx) + Math.abs(b[1] - cz)));
+    }
+    for (let n = 0; n < BUILD_BUDGET && this.queue.length; n++) {
+      const [qx, qz] = this.queue.shift()!;
+      this.buildChunk(qx, qz);
     }
     // Pick the representation per chunk from its distance to the camera.
     for (const [key, entry] of this.chunks) {

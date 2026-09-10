@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { Heightfield, WORLD_SIZE } from './Heightfield';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
 import terrainChunk from '../shaders/terrain.glsl?raw';
-import { SimplexNoise } from '../core/Noise';
 
 /**
  * Terrain as a quadtree.
@@ -219,6 +218,68 @@ export class Terrain extends THREE.Group {
     return g;
   }
 
+
+  /**
+   * Tileable, isotropic value-noise fBm, three fields in one texture.
+   *
+   * The usual way to make a seamless texture out of simplex noise is to sample it round
+   * a torus, mixing the two angles into both coordinates. It tiles, but it is not
+   * isotropic: the mixing stretches the field along one diagonal, and every use of it —
+   * the ground's macro variation, the canopy relief — inherits a diagonal weave that
+   * reads as hatching across a whole hillside. A periodic lattice has neither problem:
+   * the noise wraps because the lattice indices wrap, and nothing is stretched.
+   *
+   * All three fields share one texture because the terrain shader is already at sixteen
+   * samplers — five material sets, three shadow cascades, the environment and the cloud
+   * map — and the seventeenth does not fail loudly. The program simply refuses to link
+   * and the ground renders white.
+   */
+  static makeMacroNoise(N = 256): THREE.DataTexture {
+    const fade = (t: number) => t * t * (3 - 2 * t);
+    const field = (freq: number, octaves: number, seed: number) => {
+      const hash = (ix: number, iy: number, o: number) => {
+        let h = Math.imul(ix + seed, 374761393) ^ Math.imul(iy + o * 9176 + seed, 668265263);
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      };
+      const buf = new Float32Array(N * N);
+      let lo = Infinity, hi = -Infinity;
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        let v = 0, amp = 1, norm = 0, f = freq;
+        for (let o = 0; o < octaves; o++) {
+          const x = i / N * f, y = j / N * f;
+          const ix = Math.floor(x), iy = Math.floor(y);
+          const tx = fade(x - ix), ty = fade(y - iy);
+          const w = (a: number, b: number) => hash(((a % f) + f) % f, ((b % f) + f) % f, o);
+          const a0 = w(ix, iy), a1 = w(ix + 1, iy), b0 = w(ix, iy + 1), b1 = w(ix + 1, iy + 1);
+          const top = a0 + (a1 - a0) * tx, bot = b0 + (b1 - b0) * tx;
+          v += amp * (top + (bot - top) * ty);
+          norm += amp; amp *= 0.5; f *= 2;
+        }
+        const u = v / norm;
+        buf[j * N + i] = u;
+        if (u < lo) lo = u;
+        if (u > hi) hi = u;
+      }
+      for (let k = 0; k < buf.length; k++) buf[k] = (buf[k] - lo) / (hi - lo);
+      return buf;
+    };
+    const r = field(4, 5, 77);      // macro variation, kilometre scale
+    const g = field(13, 4, 991);    // canopy relief, tens of metres
+    const b = field(7, 5, 4211);    // a third, decorrelated field for whatever needs one
+    const data = new Uint8Array(N * N * 4);
+    for (let k = 0; k < N * N; k++) {
+      data[k * 4] = r[k] * 255; data[k * 4 + 1] = g[k] * 255; data[k * 4 + 2] = b[k] * 255; data[k * 4 + 3] = 255;
+    }
+    const t = new THREE.DataTexture(data, N, N);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = true;
+    t.needsUpdate = true;
+    return t;
+  }
+
   private makeMaterial(loader: THREE.TextureLoader): THREE.MeshStandardMaterial {
     const tex = (path: string, srgb = false) => {
       const t = loader.load(path);
@@ -230,14 +291,7 @@ export class Terrain extends THREE.Group {
     const set = (name: string) => ({ D: tex(`/textures/${name}/albedo.webp`, true), N: tex(`/textures/${name}/nrm.webp`) });
     const grass = set('grass'), forest = set('forest'), cliff = set('rockface'), sand = set('sand'), scree = set('scree');
 
-    // Macro variation noise texture (CPU generated, tileable enough at this frequency).
-    const N = 256, data = new Uint8Array(N * N * 4), noise = new SimplexNoise(77);
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const a = (i / N) * Math.PI * 2, b = (j / N) * Math.PI * 2; // tileable via 4D-ish trick on a torus
-      const v = noise.fbm2D(Math.cos(a) * 1.7 + Math.sin(b) * 0.9, Math.sin(a) * 1.7 + Math.cos(b) * 1.3, 4) * 0.5 + 0.5;
-      const k = (j * N + i) * 4; data[k] = data[k + 1] = data[k + 2] = Math.floor(v * 255); data[k + 3] = 255;
-    }
-    const macro = new THREE.DataTexture(data, N, N); macro.wrapS = macro.wrapT = THREE.RepeatWrapping; macro.needsUpdate = true;
+    const macro = Terrain.makeMacroNoise(256);
 
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
     const uniforms = {
@@ -246,7 +300,7 @@ export class Terrain extends THREE.Group {
       tCliffD: { value: cliff.D }, tCliffN: { value: cliff.N },
       tSandD: { value: sand.D }, tSandN: { value: sand.N },
       tScreeD: { value: scree.D }, tScreeN: { value: scree.N },
-      tMacro: { value: macro }, uSeaLevel: { value: 0 }, uGroundLift: { value: 1.45 },
+      tMacro: { value: macro }, uSeaLevel: { value: 0 }, uGroundLift: { value: 1.0 },
     };
     (mat as any)._apKey = "terrain";
     (mat as any).terrainUniforms = uniforms;
