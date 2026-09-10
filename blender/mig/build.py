@@ -10,7 +10,7 @@ if HERE not in sys.path:
 import importlib
 import mlib
 importlib.reload(mlib)
-from mlib import (S0, P, cr_chain, lerp, airfoil_slice, MB, new_obj, clean,
+from mlib import (S0, P, cr_chain, lerp, airfoil_slice, naca_half, MB, new_obj, clean,
                   cut_faces, set_origin, finish, mirror_object, empty,
                   parent_to, make_mat, _centroid)
 
@@ -814,7 +814,48 @@ set_origin(IntakeGrille_L, 0.885, GS, GZ1)
 finish(IntakeGrille_L, bevel=0.002, angle=R(45))
 
 # ========================================================== MIRRORING =====
-PAIRS = [(Wing_L, 'Wing_R'), (Slat_L, 'Slat_R'), (Flap_L, 'Flap_R'),
+# ========================================================== HARDPOINTS ====
+# Three pylons per wing at the real stations, plus the gun port in the port LERX
+# and the chaff/flare dispensers in the spine. The pylons stay on the aircraft
+# whatever it is carrying; the stores themselves live in stores.glb and are hung
+# off the Store_* empties by the engine.
+PYLON_X = (4.20, 3.20, 2.30)          # station 1 outboard .. station 3 inboard
+PYLON_DEPTH = (0.20, 0.24, 0.26)
+PYLON_HALFW = (0.058, 0.066, 0.072)
+
+
+def pylon_body(mb, x, s0, s1, z0, z1, hw, mat=0):
+    """Lofted hexagonal section: pointed fore and aft, flat-sided in between, and
+    narrowing towards the bottom face where the store hangs. A plain box reads as
+    a plank bolted under the wing; this reads as a fairing."""
+    L = s1 - s0
+    rings = []
+    for (zz, k) in ((z0, 1.0), (z1 + 0.035, 0.95), (z1, 0.62)):
+        w = hw * k
+        pts = [(s0, 0.0), (s0 + 0.16 * L, w), (s1 - 0.22 * L, w),
+               (s1, 0.0), (s1 - 0.22 * L, -w), (s0 + 0.16 * L, -w)]
+        rings.append([P(x + dx, ss, zz) for (ss, dx) in pts])
+    mb._loft_world(rings, True, True, True, mat)
+
+
+PYL_L = []
+for i, px in enumerate(PYLON_X):
+    le, ch, zw, tc = wing_geom(px)
+    s_le = le + 0.14 * ch
+    s_te = le + 0.66 * ch
+    z_top = zw - naca_half(tc, 0.35) * ch + 0.010
+    z_bot = z_top - PYLON_DEPTH[i]
+    mbp = MB()
+    pylon_body(mbp, px, s_le, s_te, z_top, z_bot, PYLON_HALFW[i], 0)
+    ob = new_obj('Pylon_L%d' % (i + 1), mbp, [CAMO])
+    set_origin(ob, 0.0, S0, 0.0)
+    finish(ob, bevel=0.006)
+    PYL_L.append(ob)
+    E_STORE = ((px, (s_le + s_te) * 0.5, z_bot))
+    globals()['_STORE_L%d' % (i + 1)] = E_STORE
+
+PAIRS = [(PYL_L[0], 'Pylon_R1'), (PYL_L[1], 'Pylon_R2'), (PYL_L[2], 'Pylon_R3'),
+         (Wing_L, 'Wing_R'), (Slat_L, 'Slat_R'), (Flap_L, 'Flap_R'),
          (Aileron_L, 'Aileron_R'), (Fin_L, 'Fin_R'), (Rudder_L, 'Rudder_R'),
          (Stabilator_L, 'Stabilator_R'), (Nozzle_L, 'Nozzle_R'),
          (Gear_L, 'Gear_R'), (Wheel_L, 'Wheel_R'), (GearDoor_L, 'GearDoor_R'),
@@ -829,6 +870,16 @@ wr = MIR['Wing_R']
 for i, sl in enumerate(wr.data.materials):
     if sl and sl.name.startswith('Light_Red'):
         wr.data.materials[i] = M('Light_Green')
+
+# The gun port itself: a shallow blister with a recessed muzzle opening. Without it
+# the tracers appear out of bare skin.
+mbg = MB()
+_gz = body_top_z(6.30, 1.045)
+mbg.cyl((1.045, 6.90, _gz + 0.010), (1.045, 6.05, _gz + 0.055), 0.105, 0.075, 14, True, 0)
+mbg.cyl((1.045, 6.30, _gz + 0.040), (1.045, 6.10, _gz + 0.052), 0.038, 0.038, 12, True, 1)
+GunPort = new_obj('GunPort', mbg, [CAMO, M('Cockpit_Dark')])
+set_origin(GunPort, 0.0, S0, 0.0)
+finish(GunPort, bevel=0.004)
 
 # ============================================================ EMPTIES =====
 Mig29 = empty('Mig29', 0, S0, 0, 1.0)
@@ -847,6 +898,16 @@ E['Contact_R'] = empty('Contact_R', -(MAX_ + 0.125), MAS, -1.900, 0.10)
 le_, ch_, z_, tc_ = wing_geom(5.60)
 E['Nav_L'] = empty('Nav_L', 5.700, le_ + 0.10, z_ + 0.012, 0.08)
 E['Nav_R'] = empty('Nav_R', -5.700, le_ + 0.10, z_ + 0.012, 0.08)
+for i in range(3):
+    sx, ss, sz = globals()['_STORE_L%d' % (i + 1)]
+    E['Store_L%d' % (i + 1)] = empty('Store_L%d' % (i + 1), sx, ss, sz, 0.12)
+    E['Store_R%d' % (i + 1)] = empty('Store_R%d' % (i + 1), -sx, ss, sz, 0.12)
+# GSh-30-1: port LERX, muzzle on the upper surface just forward of the wing root.
+E['Gun_Muzzle'] = empty('Gun_Muzzle', 1.045, 6.180, body_top_z(6.18, 1.045) + 0.055, 0.10)
+E['Gun_Eject'] = empty('Gun_Eject', 1.045, 6.560, body_top_z(6.56, 1.045) - 0.020, 0.08)
+# BVP-30-26 dispensers, in the spine between the fins.
+E['Flare_L'] = empty('Flare_L', 0.520, 13.10, body_top_z(13.10, 0.52) - 0.030, 0.08)
+E['Flare_R'] = empty('Flare_R', -0.520, 13.10, body_top_z(13.10, 0.52) - 0.030, 0.08)
 E['Beacon'] = empty('Beacon', 0.0, 8.400, BEACON_Z + 0.070, 0.08)
 E['Strobe_Tail'] = empty('Strobe_Tail', 0.0, 15.20, 0.190, 0.08)
 
@@ -858,7 +919,10 @@ parent_to(Cockpit, Mig29)
 parent_to(E['Camera_Pilot'], Cockpit)
 for nm, gp in (('Wheel_Nose', 'Gear_Nose'), ('Wheel_L', 'Gear_L'), ('Wheel_R', 'Gear_R')):
     parent_to(bpy.data.objects[nm], bpy.data.objects[gp])
-TOP = ['Fuselage', 'Wing_L', 'Wing_R', 'Aileron_L', 'Aileron_R', 'Flap_L',
+TOP = ['GunPort', 'Pylon_L1', 'Pylon_L2', 'Pylon_L3', 'Pylon_R1', 'Pylon_R2', 'Pylon_R3',
+       'Store_L1', 'Store_L2', 'Store_L3', 'Store_R1', 'Store_R2', 'Store_R3',
+       'Gun_Muzzle', 'Gun_Eject', 'Flare_L', 'Flare_R',
+       'Fuselage', 'Wing_L', 'Wing_R', 'Aileron_L', 'Aileron_R', 'Flap_L',
        'Flap_R', 'Slat_L', 'Slat_R', 'Stabilator_L', 'Stabilator_R',
        'Rudder_L', 'Rudder_R', 'Airbrake', 'Fin_L', 'Fin_R', 'Nozzle_L',
        'Nozzle_R', 'Canopy_Glass', 'Canopy_Frame', 'Gear_Nose', 'Gear_L',

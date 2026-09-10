@@ -147,10 +147,21 @@ export class Vegetation extends THREE.Group {
     return geo;
   }
 
+  /**
+   * Ground that has been built on. Anything installed on the terrain has to punch a
+   * hole in the forest, or the trees grow straight through it — which is exactly what
+   * a fuel farm with a pine coming out of the roof looks like.
+   */
+  readonly clearings: { x: number; z: number; r: number }[] = [];
+
   /** Same forest test as the terrain shader, so trees only grow where the ground is forest. */
   private forestDensity(x: number, z: number): number {
     const h = this.hf.getHeight(x, z);
     if (h < 8 || h > 430) return 0;
+    for (const c of this.clearings) {
+      const dx = x - c.x, dz = z - c.z;
+      if (dx * dx + dz * dz < c.r * c.r) return 0;
+    }
     const slope = this.hf.getSlope(x, z);
     if (slope > 0.42) return 0;
     const macro = this.noise.fbm2D(x * 0.00035 * 6.2832, z * 0.00035 * 6.2832, 4) * 0.5 + 0.5;

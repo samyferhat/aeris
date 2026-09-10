@@ -80,6 +80,10 @@ export class FlightModel {
   /** Commanded gear position: 1 down, 0 up. Moves at the configured rate. */
   gearTarget = 1;
   gear = 1;
+  /** Mass of the external stores still on the pylons, kg. Owned by the loadout. */
+  storeMass = 0;
+  /** Parasite drag coefficient the same stores add. */
+  storeDrag = 0;
   wheels: WheelDef[] = [];
 
   readonly state: FlightState = {
@@ -174,6 +178,10 @@ export class FlightModel {
 
   private integrate(dt: number, brake: boolean) {
     const cfg = this.config;
+    // External stores are heavy and draggy, and both change as they leave: a MiG that
+    // has just emptied its pylons should feel noticeably lighter and faster, which is
+    // half the reward for spending the ordnance.
+    const mass = cfg.mass + this.storeMass;
     const q = this.quaternion;
     this.syncBasis();
     const invQ = _q1.copy(q).invert();
@@ -206,7 +214,7 @@ export class FlightModel {
     // rather than an accident.
     const machDrag = cfg.machDragRise * smoothstep(cfg.machDragOnset, cfg.machDragOnset + 0.14, mach);
     const gearDrag = 0.022 * this.gear * (cfg.retractableGear ? 1 : 0);
-    const CD = cfg.cd0 + cfg.cdFlaps * this.flaps + gearDrag + machDrag
+    const CD = cfg.cd0 + this.storeDrag + cfg.cdFlaps * this.flaps + gearDrag + machDrag
       + (CL * CL) / (Math.PI * cfg.oswald * AR)
       + 0.35 * stallMix * Math.abs(alpha);
     const CY = -0.85 * beta;
@@ -258,7 +266,7 @@ export class FlightModel {
     let Mm = qbar * cfg.wingArea * cfg.chord * Cm;
     let Mn = qbar * cfg.wingArea * cfg.span * Cn;
     // A little pitch authority at taxi speed so the nose can be raised.
-    Mm += 0.4 * cfg.mass * elevatorEff * (1 - smoothstep(0, 25, V)) * (V / 25);
+    Mm += 0.4 * mass * elevatorEff * (1 - smoothstep(0, 25, V)) * (V / 25);
 
     // Hands-off stabilisation. A real aeroplane is statically stable but takes tens of
     // seconds to settle; on a keyboard that reads as one that will not hold what you
@@ -270,7 +278,7 @@ export class FlightModel {
       const pitchAngle = Math.asin(clamp(this.forward.y, -1, 1));
       const relaxRoll = Math.max(0, 1 - Math.abs(this.aileron) * 6) * airborne * cfg.stability;
       const relaxPitch = Math.max(0, 1 - Math.abs(this.elevator) * 6) * airborne * cfg.stability;
-      const authority = Math.min(1, qbar / 600) * cfg.mass;
+      const authority = Math.min(1, qbar / 600) * mass;
       Ml += (-bankAngle * 1.43 - p * 2.48) * relaxRoll * authority;
       Mm += (-pitchAngle * 1.33 - qq * 3.24) * relaxPitch * authority;
       Mn += (-r * 1.43) * authority * airborne * cfg.stability;
@@ -279,7 +287,7 @@ export class FlightModel {
     // --- back to model frame ------------------------------------------------
     const F = _v2.set(-Fy, -Fz, Fx);
     const M = _v3.set(-Mm, -Mn, Ml);
-    F.add(_v4.set(0, -G * cfg.mass, 0).applyQuaternion(invQ));
+    F.add(_v4.set(0, -G * mass, 0).applyQuaternion(invQ));
 
     // --- landing gear -------------------------------------------------------
     let onGround = false, slip = 0;
@@ -311,10 +319,10 @@ export class FlightModel {
       const vLong = vPt.dot(wheelFwd), vLat = vPt.dot(wheelRight);
       const latForce = -clamp(vLat * cfg.gearSpring * 0.042, -0.9 * fn, 0.9 * fn);
       slip = Math.max(slip, Math.abs(vLat));
-      let longForce = -Math.sign(vLong) * Math.min(Math.abs(vLong) * cfg.mass * 0.38, 0.025 * fn);
+      let longForce = -Math.sign(vLong) * Math.min(Math.abs(vLong) * mass * 0.38, 0.025 * fn);
       if (brake && wheel.brake) longForce -= Math.sign(vLong) * Math.min(Math.abs(vLong) * cfg.brakeForce, 0.55 * fn);
       if (ground > 0 && !this.onRunway(worldPt.x, worldPt.z)) {
-        longForce -= Math.sign(vLong) * Math.min(Math.abs(vLong) * cfg.mass * 0.76, 0.12 * fn);   // grass drag
+        longForce -= Math.sign(vLong) * Math.min(Math.abs(vLong) * mass * 0.76, 0.12 * fn);   // grass drag
       }
       Fw.addScaledVector(wheelRight, latForce).addScaledVector(wheelFwd, longForce);
       F.add(Fw);
@@ -334,7 +342,7 @@ export class FlightModel {
     }
 
     // --- integrate (semi-implicit Euler) ------------------------------------
-    const aBody = F.divideScalar(cfg.mass);
+    const aBody = F.divideScalar(mass);
     this.accel.copy(aBody);
     this.velocity.addScaledVector(_v13.copy(aBody).applyQuaternion(q), dt);
     this.position.addScaledVector(this.velocity, dt);

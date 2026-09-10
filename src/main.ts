@@ -21,8 +21,16 @@ import { Audio } from './audio/Audio';
 import { Afterburner } from './fx/Afterburner';
 import { JetEffects } from './fx/JetEffects';
 import { Selection } from './ui/Selection';
+import { Loadout } from './combat/Armament';
+import { StoreRack } from './combat/StoreRack';
+import { CombatFx } from './combat/Effects';
+import { Ordnance } from './combat/Ordnance';
+import { STORES } from './combat/Armament';
+import { TargetWorld } from './combat/Targets';
+import { EnemyFleet } from './combat/Enemy';
 
 const _size = new THREE.Vector2();
+const _zero = new THREE.Vector3();
 const smoothstepJS = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const loadingFill = document.querySelector('#loading .fill') as HTMLElement;
 const loadingMsg = document.querySelector('#loading .msg') as HTMLElement;
@@ -79,9 +87,25 @@ async function boot() {
     }
   }
 
+  progress(0.84, 'Armement');
+  await StoreRack.preload().catch((e) => console.warn('stores unavailable', e));
+  await TargetWorld.preload().catch((e) => console.warn('targets unavailable', e));
+  await EnemyFleet.preload().catch((e) => console.warn('enemies unavailable', e));
+
   let aircraft: Aircraft | null = null;
   let afterburner: Afterburner | null = null;
   let jetEffects: JetEffects | null = null;
+
+  // Only the fighter is armed. The loadout owns the armament state; the rack owns the
+  // meshes, and the flight model is told the mass and drag they cost.
+  const loadout = new Loadout('mixed');
+  const rack = new StoreRack();
+  const syncStores = () => {
+    rack.rebuild(loadout);
+    fm.storeMass = loadout.mass;
+    fm.storeDrag = loadout.drag;
+  };
+  loadout.onChange = syncStores;
 
   /** Puts one of the loaded aircraft into the world and points everything at it. */
   const equip = (cfg: AircraftConfig) => {
@@ -107,6 +131,15 @@ async function boot() {
     }
     if (aircraft.locators.Camera_Pilot) rig.pilotEye.copy(aircraft.locators.Camera_Pilot);
     for (const m of aircraft.materials) if (!(m as THREE.ShaderMaterial).isShaderMaterial) engine.setupShadowMaterial(m);
+    for (const m of StoreRack.allMaterials()) engine.setupShadowMaterial(m);
+
+    if (cfg.armed) {
+      rack.bind(aircraft, aircraft.locators);
+      syncStores();
+    } else {
+      rack.clear();
+      fm.storeMass = 0; fm.storeDrag = 0;
+    }
 
     if (cfg.propulsion === 'turbofan') {
       const exits = ['Nozzle_Exit_L', 'Nozzle_Exit_R']
@@ -124,6 +157,54 @@ async function boot() {
 
   const particles = new Particles();
   scene.add(particles);
+  const combatFx = new CombatFx();
+  scene.add(combatFx);
+  const ordnance = new Ordnance(combatFx, hf, rack);
+  scene.add(ordnance);
+  const targets = new TargetWorld(hf, combatFx);
+  scene.add(targets);
+  targets.build(() => { /* site events are wired to the HUD below */ });
+  // The forest has to make room for what has been built on it.
+  vegetation.clearings.push(...targets.clearings);
+  const enemies = new EnemyFleet(hf, combatFx);
+  scene.add(enemies);
+  // A few jets sitting on the enemy apron, and a patrol in the air over the middle.
+  const field = targets.airfieldCentre;
+  if (field) {
+    for (let i = 0; i < 4; i++) {
+      const node = EnemyFleet.parked();
+      if (!node) break;
+      const px = field.x - 46 + i * 26, pz = field.z - 26;
+      targets.addParked(node, new THREE.Vector3(px, hf.getHeight(px, pz), pz), Math.PI * 0.5 + 0.1 * i);
+      targets.add(node);
+    }
+  }
+  for (let i = 0; i < 3; i++) {
+    enemies.spawn(new THREE.Vector3(600 + i * 700, 1500 + i * 260, 1400 - i * 500),
+      Math.PI * 0.5 + i * 0.6, 240 + i * 12);
+  }
+  /** Everything the ordnance can hit, rebuilt when the roster changes. */
+  const refreshTargets = () => {
+    const list = targets.all.slice();
+    enemies.collectTargets(list as never[]);
+    ordnance.targets = list;
+  };
+  refreshTargets();
+  for (const m of TargetWorld.allMaterials()) engine.setupShadowMaterial(m);
+  for (const m of targets.apronMaterials) engine.setupShadowMaterial(m);
+  for (const m of EnemyFleet.allMaterials()) engine.setupShadowMaterial(m);
+  /** The weapon the trigger and the release button are pointed at. */
+  let selectedWeapon: string | null = null;
+  const pickWeapon = (dir: number) => {
+    const av = loadout.available;
+    if (!av.length) { selectedWeapon = null; return; }
+    const i = selectedWeapon ? av.indexOf(selectedWeapon) : -1;
+    selectedWeapon = av[((i + dir) % av.length + av.length) % av.length];
+  };
+  loadout.onChange = () => {
+    syncStores();
+    if (!selectedWeapon || !loadout.available.includes(selectedWeapon)) pickWeapon(1);
+  };
   const audio = new Audio();
   audio.attach(canvas);
 
@@ -156,6 +237,14 @@ async function boot() {
       case 'hud': hud.toggle(); break;
       case 'mute': audio.toggleMute(); break;
       case 'gear': if (fm.config.retractableGear) fm.gearTarget = fm.gearTarget > 0.5 ? 0 : 1; break;
+      case 'weaponNext': pickWeapon(1); break;
+      case 'weaponPrev': pickWeapon(-1); break;
+      case 'launch':
+        if (fm.config.armed && selectedWeapon) {
+          ordnance.launch(loadout, selectedWeapon, fm, null, atmosphere.night);
+          rig.addShake(0.25);
+        }
+        break;
     }
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
@@ -196,7 +285,7 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, STORES, get weapon() { return selectedWeapon; } };
 
   let last = performance.now();
   let turbulence = 0;
@@ -226,6 +315,27 @@ async function boot() {
       }
       fm.touchdownEvent = 0;
     }
+    // --- weapons -----------------------------------------------------------
+    if (aircraft && fm.config.armed && !paused) {
+      const muzzle = aircraft.locators.Gun_Muzzle ?? _zero;
+      const eject = aircraft.locators.Gun_Eject ?? _zero;
+      ordnance.fireGun(dt, fm, muzzle, eject, loadout, input.controls.fire, atmosphere.night);
+      if (ordnance.gunFiredThisFrame) {
+        // The recoil is real: it slows the aircraft and shakes the airframe, which is
+        // most of why a burst feels like firing something rather than pressing a key.
+        const dv = ordnance.recoil.z / (fm.config.mass + fm.storeMass);
+        fm.velocity.addScaledVector(fm.forward, dv);
+        rig.addShake(0.09);
+      }
+    }
+    if (!paused) {
+      // A fighter breaks when a missile is on its way; nothing else scares it.
+      enemies.update(dt, fm.position, () => ordnance.missileInbound, atmosphere.night);
+      refreshTargets();
+      ordnance.update(dt, fm, atmosphere.night);
+      targets.update(dt, atmosphere.night);
+    }
+
     aircraft?.update(dt, fm, atmosphere.night);
     rig.update(dt, fm, input.consumeOrbit(), turbulence);
     atmosphere.update(camera);
@@ -250,6 +360,8 @@ async function boot() {
       const pixelScale = renderer.getDrawingBufferSize(_size).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
       particles.update(dt, fm.state, fm.position, fm.quaternion, fm.velocity, aircraft.locators, pixelScale,
         atmosphere.night, fm.config.propulsion);
+      combatFx.update(dt, camera, atmosphere.sunDir, atmosphere.sunColor, post.ambientTop, pixelScale,
+        (x, z) => Math.max(0, hf.getHeight(x, z)));
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);

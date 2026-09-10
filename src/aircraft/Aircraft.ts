@@ -170,7 +170,9 @@ export class Aircraft extends THREE.Group {
     for (const n of [
       'Camera_Pilot', 'Exhaust', 'Wingtip_L', 'Wingtip_R', 'Contact_Nose', 'Contact_L', 'Contact_R',
       'Nav_L', 'Nav_R', 'Beacon', 'Strobe_Tail',
-      'Nozzle_Exit_L', 'Nozzle_Exit_R', 'LERX_L', 'LERX_R'])
+      'Nozzle_Exit_L', 'Nozzle_Exit_R', 'LERX_L', 'LERX_R',
+      'Store_L1', 'Store_L2', 'Store_L3', 'Store_R1', 'Store_R2', 'Store_R3',
+      'Gun_Muzzle', 'Gun_Eject', 'Flare_L', 'Flare_R'])
       if (this.parts[n]) { this.updateMatrixWorld(true); this.locators[n] = this.parts[n].getWorldPosition(new THREE.Vector3()).sub(this.getWorldPosition(new THREE.Vector3())); }
     this.setupLights();
     this.setupCabinLight();

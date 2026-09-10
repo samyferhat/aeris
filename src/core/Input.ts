@@ -9,10 +9,12 @@ export interface Controls {
   throttle: number; // 0..1
   flaps: number;    // 0..1 (target)
   brake: boolean;
+  /** Gun trigger, held. */
+  fire: boolean;
 }
 
 export class Input {
-  readonly controls: Controls = { pitch: 0, roll: 0, yaw: 0, throttle: 0, flaps: 0, brake: false };
+  readonly controls: Controls = { pitch: 0, roll: 0, yaw: 0, throttle: 0, flaps: 0, brake: false, fire: false };
   private keys = new Set<string>();
   private pressed = new Set<string>();       // edge-triggered
   private mouse = { x: 0, y: 0, active: false };
@@ -24,20 +26,26 @@ export class Input {
   onAction: ((action: string) => void) | null = null;
   orbitDelta = { x: 0, y: 0, zoom: 0 };
   pointerLocked = false;
+  /** Held state of the mouse trigger, kept separate from the keyboard. */
+  private trigger = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       this.keys.add(e.code); this.pressed.add(e.code);
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
     canvas.addEventListener('mousedown', (e) => {
       if (e.button === 2 && !this.pointerLocked) canvas.requestPointerLock();
-      if (e.button === 0) this.mouse.active = true;
+      if (e.button === 0) { if (this.pointerLocked) this.trigger = true; else this.mouse.active = true; }
+      if (e.button === 1) { e.preventDefault(); this.onAction?.('lock'); }
     });
-    window.addEventListener('mouseup', () => (this.mouse.active = false));
+    window.addEventListener('mouseup', (e) => {
+      this.mouse.active = false;
+      if (e.button === 0) this.trigger = false;
+    });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
       if (!this.pointerLocked) this.mouse.x = this.mouse.y = 0;
@@ -76,7 +84,9 @@ export class Input {
     // Pitch: arrow-down = pull. (ArrowUp pushes, like a real yoke.)
     if (k.has('ShiftLeft') || k.has('ShiftRight')) c.throttle = clamp01(c.throttle + dt * 0.5);
     if (k.has('ControlLeft') || k.has('ControlRight')) c.throttle = clamp01(c.throttle - dt * 0.5);
-    c.brake = k.has('Space');
+    c.brake = k.has('KeyB');
+    // Space is the trigger on a combat aircraft; wheel braking moves to B.
+    c.fire = k.has('Space') || this.trigger;
     // --- mouse (pointer lock)
     if (this.pointerLocked) {
       tp += this.mouse.y; tr += this.mouse.x;
@@ -95,8 +105,10 @@ export class Input {
       if (p.buttons[0]?.pressed) c.throttle = clamp01(c.throttle - dt * 0.5);
       if (p.buttons[1]?.pressed) c.throttle = clamp01(c.throttle + dt * 0.5);
       if (p.buttons[2]?.pressed) c.brake = true;
+      if (p.buttons[5]?.pressed) c.fire = true;
       this.orbitDelta.x += rx * 8; this.orbitDelta.y += ry * 8;
-      const map: Record<number, string> = { 3: 'camera', 9: 'reset', 8: 'pause', 12: 'flapsUp', 13: 'flapsDown', 4: 'timeDown', 5: 'timeUp', 10: 'gear' };
+      const map: Record<number, string> = { 3: 'camera', 9: 'reset', 8: 'pause', 12: 'flapsUp', 13: 'flapsDown',
+        14: 'weaponPrev', 15: 'weaponNext', 10: 'gear', 4: 'launch', 11: 'lock' };
       p.buttons.forEach((b, i) => {
         if (b.pressed && !this.padButtonsPrev[i] && map[i]) this.onAction?.(map[i]);
         this.padButtonsPrev[i] = b.pressed;
@@ -111,6 +123,7 @@ export class Input {
     const keyMap: Record<string, string> = {
       KeyC: 'camera', KeyR: 'reset', KeyP: 'pause', Escape: 'pause', KeyF: 'flapsUp', KeyV: 'flapsDown',
       BracketLeft: 'timeDown', BracketRight: 'timeUp', KeyH: 'hud', KeyM: 'mute', KeyG: 'gear',
+      Enter: 'launch', Tab: 'weaponNext', KeyT: 'lock', KeyL: 'loadout',
     };
     for (const code of this.pressed) if (keyMap[code]) this.onAction?.(keyMap[code]);
     this.pressed.clear();
