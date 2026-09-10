@@ -206,7 +206,7 @@ async function boot() {
     e.onLaunch = (from) => {
       // The shot uses the same R-73 the player carries, so the warning, the smoke and
       // the manoeuvre needed to defeat it are all things already learnt from firing one.
-      ordnance.launchFree('R73', from, e.quaternion, e.velocity, player, atmosphere.night);
+      ordnance.launchFree('R73', from, e.quaternion, e.velocity, player, atmosphere.night, e);
       combatHud.launchWarning(from);
       audio.voice('Пуск');
     };
@@ -217,6 +217,7 @@ async function boot() {
     enemies.collectTargets(list as never[]);
     if (fm.config.armed) list.push(player as never);
     ordnance.targets = list;
+    ordnance.playerTarget = fm.config.armed ? (player as never) : null;
   };
   refreshTargets();
   const targeting = new Targeting(ordnance);
@@ -378,7 +379,7 @@ async function boot() {
     }
     if (!paused) {
       // A fighter breaks when a missile is on its way; nothing else scares it.
-      enemies.update(dt, fm.position, () => ordnance.missileInbound, atmosphere.night);
+      enemies.update(dt, fm.position, (e) => ordnance.chasedBy(e), atmosphere.night);
       refreshTargets();
   const targeting = new Targeting(ordnance);
 

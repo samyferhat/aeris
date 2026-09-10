@@ -42,6 +42,8 @@ interface Round {
   /** Seconds of motor burn left. */
   burn: number;
   target: DamageTarget | null;
+  /** Whoever fired it. A round must not collide with its own launcher. */
+  owner: DamageTarget | null;
   smokeTimer: number;
   /** Fin deflection, for the visible control surfaces. */
   finDefl: THREE.Vector2;
@@ -63,6 +65,8 @@ const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 // collision segment the caller had just stashed in it, and every round flew
 // through the world untouched.
 const _a2 = new THREE.Vector3(), _s1 = new THREE.Vector3(), _s2 = new THREE.Vector3();
+// Guidance gets its own set too, for the same reason.
+const _g1 = new THREE.Vector3(), _g2 = new THREE.Vector3(), _g3 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const FWD = new THREE.Vector3(0, 0, 1);
 
@@ -74,6 +78,13 @@ export class Ordnance extends THREE.Group {
   private pool: Round[] = [];
   /** Everything that can be shot at, registered by the world. */
   targets: DamageTarget[] = [];
+  /**
+   * The player, as a target. Registered so enemy missiles have something to chase —
+   * and remembered here so the player's own rounds do not collide with the aircraft
+   * they were just fired from, which is exactly what happened when it was first added
+   * to the list: every burst detonated on the muzzle.
+   */
+  playerTarget: DamageTarget | null = null;
   /** Fired when something is hit hard enough to matter, for audio and the HUD. */
   onImpact: ((pos: THREE.Vector3, power: number, kind: 'air' | 'ground' | 'fuel') => void) | null = null;
   onFire: ((what: 'gun' | 'missile' | 'rocket' | 'bomb', pos: THREE.Vector3) => void) | null = null;
@@ -95,7 +106,7 @@ export class Ordnance extends THREE.Group {
     return {
       kind: 'bullet', alive: true, pos: new THREE.Vector3(), vel: new THREE.Vector3(),
       quat: new THREE.Quaternion(), age: 0, life: 1, spec: null, mesh: null, fins: null,
-      drop: 0, burn: 0, target: null, smokeTimer: 0, finDefl: new THREE.Vector2(),
+      drop: 0, burn: 0, target: null, owner: null, smokeTimer: 0, finDefl: new THREE.Vector2(),
       trailScale: 1, prev: new THREE.Vector3(), spin: 0, tracer: false, damage: 0, blast: 0,
     };
   }
@@ -103,7 +114,7 @@ export class Ordnance extends THREE.Group {
   private release(r: Round) {
     r.alive = false;
     if (r.mesh) { this.remove(r.mesh); r.mesh = null; r.fins = null; }
-    r.target = null; r.spec = null;
+    r.target = null; r.spec = null; r.owner = null;
     this.pool.push(r);
   }
 
@@ -149,6 +160,7 @@ export class Ordnance extends THREE.Group {
       r.spec = null;
       r.damage = GUN.damage; r.blast = GUN.blast;
       r.tracer = (loadout.gunRounds % GUN.tracerEvery) === 0;
+      r.owner = this.playerTarget;
       this.rounds.push(r);
 
       this.fx.muzzleFlash(_a, _c, fm.velocity, night);
@@ -198,6 +210,7 @@ export class Ordnance extends THREE.Group {
     r.target = target;
     r.damage = spec.damage; r.blast = spec.blast;
     r.smokeTimer = 0;
+    r.owner = this.playerTarget;
     r.spin = spec.kind === 'bomb' ? 0.55 : 0;
     r.trailScale = Math.max(0.6, spec.diameter * 3.0);
     r.prev.copy(r.pos);
@@ -222,7 +235,8 @@ export class Ordnance extends THREE.Group {
    * exactly as readable as the one leaving his own wing, or the warning means nothing.
    */
   launchFree(storeId: string, from: THREE.Vector3, quat: THREE.Quaternion,
-             carrierVel: THREE.Vector3, target: DamageTarget | null, night: number) {
+             carrierVel: THREE.Vector3, target: DamageTarget | null, night: number,
+             owner: DamageTarget | null = null) {
     const spec = STORES[storeId];
     if (!spec) return false;
     const r = this.take();
@@ -236,7 +250,7 @@ export class Ordnance extends THREE.Group {
     r.life = spec.life;
     r.target = target;
     r.damage = spec.damage; r.blast = spec.blast;
-    r.smokeTimer = 0; r.spin = 0;
+    r.smokeTimer = 0; r.spin = 0; r.owner = owner;
     r.trailScale = Math.max(0.6, spec.diameter * 3.0);
     r.prev.copy(r.pos);
     const mesh = StoreRack.spawnMesh(spec.model);
@@ -289,7 +303,7 @@ export class Ordnance extends THREE.Group {
         r.trailScale = 1.7;
         r.prev.copy(r.pos);
         r.damage = s.spec.damage; r.blast = s.spec.blast;
-        r.target = null; r.smokeTimer = 0; r.spin = 0;
+        r.target = null; r.owner = this.playerTarget; r.smokeTimer = 0; r.spin = 0;
         const mesh = StoreRack.spawnMesh(S8_MODEL);
         if (mesh) { mesh.position.copy(r.pos); mesh.quaternion.copy(r.quat); r.mesh = mesh; this.add(mesh); }
         this.rounds.push(r);
@@ -411,27 +425,27 @@ export class Ordnance extends THREE.Group {
    */
   private guide(dt: number, r: Round, speed: number) {
     const t = r.target!;
-    _b.copy(t.position).sub(r.pos);              // range vector
-    const range = _b.length();
+    _g1.copy(t.position).sub(r.pos);             // range vector
+    const range = _g1.length();
     if (range < 1e-3) return;
-    _c.copy(t.velocity).sub(r.vel);              // closing velocity
-    const closing = -_c.dot(_b) / range;
+    _g2.copy(t.velocity).sub(r.vel);             // closing velocity
+    const closing = -_g2.dot(_g1) / range;
     // LOS rotation rate vector: r × v / |r|²
-    _d.crossVectors(_b, _c).divideScalar(range * range);
+    _g3.crossVectors(_g1, _g2).divideScalar(range * range);
     const N = 3.6;
     // a = N · Vc · (Ω × û)
-    _e.copy(_b).divideScalar(range);
-    _a.crossVectors(_d, _e).multiplyScalar(N * Math.max(closing, speed * 0.35));
+    _s1.copy(_g1).divideScalar(range);
+    _s2.crossVectors(_g3, _s1).multiplyScalar(N * Math.max(closing, speed * 0.35));
     const gLimit = r.spec!.maxG * 9.81;
-    if (_a.lengthSq() > gLimit * gLimit) _a.setLength(gLimit);
-    r.vel.addScaledVector(_a, dt);
+    if (_s2.lengthSq() > gLimit * gLimit) _s2.setLength(gLimit);
+    r.vel.addScaledVector(_s2, dt);
     // Feed the same command to the fins, scaled to something visible.
-    _b.copy(_a).applyQuaternion(_q2.copy(r.quat).invert()).divideScalar(gLimit);
-    r.finDefl.set(THREE.MathUtils.clamp(_b.x, -1, 1) * 0.38, THREE.MathUtils.clamp(_b.y, -1, 1) * 0.38);
+    _g2.copy(_s2).applyQuaternion(_q2.copy(r.quat).invert()).divideScalar(gLimit);
+    r.finDefl.set(THREE.MathUtils.clamp(_g2.x, -1, 1) * 0.38, THREE.MathUtils.clamp(_g2.y, -1, 1) * 0.38);
     // Lose the lock if the target slips outside the seeker's field of view.
-    _c.copy(t.position).sub(r.pos).normalize();
-    _d.copy(FWD).applyQuaternion(r.quat);
-    if (_c.dot(_d) < Math.cos(r.spec!.seekerFov)) r.target = null;
+    _g1.normalize();
+    _g3.copy(FWD).applyQuaternion(r.quat);
+    if (_g1.dot(_g3) < Math.cos(r.spec!.seekerFov)) r.target = null;
   }
 
   // ------------------------------------------------------------- collision ----
@@ -442,8 +456,12 @@ export class Ordnance extends THREE.Group {
     _c.copy(b).sub(a);
     const segLen2 = _c.lengthSq();
     let best: DamageTarget | null = null, bestT = 2, bestD2 = 0;
+    // Nothing is live for the first instant: a warhead is armed after it has cleared
+    // the aircraft, and a round leaving a muzzle two metres from its own wing needs
+    // that to be true here as well.
+    const armed = r.age > 0.06;
     for (const t of this.targets) {
-      if (!t.alive) continue;
+      if (!t.alive || t === r.owner || !armed) continue;
       _d.copy(t.position).sub(a);
       const u = segLen2 > 1e-9 ? THREE.MathUtils.clamp(_d.dot(_c) / segLen2, 0, 1) : 0;
       _e.copy(a).addScaledVector(_c, u);
@@ -521,20 +539,44 @@ export class Ordnance extends THREE.Group {
     }
   }
 
-  /** For the HUD: where a round fired now would end up, and how long it would take. */
+  /**
+   * Where a round fired now would end up, and how long it would take.
+   *
+   * This is the pipper, so it has to agree with the rounds themselves. Sampling the
+   * trajectory at points and asking whether any point is near a target does not: at a
+   * thousand metres a second even a thirtieth of a second is thirty-four metres, and
+   * the prediction steps clean over a lorry. It uses the same swept segment test the
+   * live rounds do, over shorter steps, which is why the pipper can be trusted.
+   */
   predictGunImpact(fm: FlightModel, out: THREE.Vector3, maxTime = 2.0): number {
     _a.copy(FWD).applyQuaternion(fm.quaternion).multiplyScalar(GUN.muzzleVelocity).add(fm.velocity);
     _b.copy(fm.position);
-    const h = 1 / 30;
+    const h = 1 / 120;
     for (let t = 0; t < maxTime; t += h) {
+      _s1.copy(_b);
       _a.y -= 9.81 * h;
       _a.multiplyScalar(Math.exp(-0.055 * h));
       _b.addScaledVector(_a, h);
-      const g = Math.max(this.hf.getHeight(_b.x, _b.z), 0);
-      if (_b.y <= g) { out.copy(_b); out.y = g; return t; }
+      _s2.copy(_b).sub(_s1);
+      const segLen2 = _s2.lengthSq();
       for (const tg of this.targets) {
-        if (!tg.alive || tg.decoy) continue;
-        if (_b.distanceToSquared(tg.position) < (tg.radius + 3) * (tg.radius + 3)) { out.copy(_b); return t; }
+        // The firing aircraft is in the target list so enemy missiles can chase it;
+        // skipping it here is what stops the pipper snapping to the player's own nose.
+        if (!tg.alive || tg.decoy || tg === this.playerTarget) continue;
+        _c.copy(tg.position).sub(_s1);
+        // Reject anything the segment cannot possibly reach before doing the maths.
+        if (_c.lengthSq() > (segLen2 + tg.radius * tg.radius) * 4 + 400) continue;
+        const u = segLen2 > 1e-9 ? THREE.MathUtils.clamp(_c.dot(_s2) / segLen2, 0, 1) : 0;
+        _d.copy(_s1).addScaledVector(_s2, u);
+        if (_d.distanceToSquared(tg.position) <= tg.radius * tg.radius) { out.copy(_d); return t; }
+      }
+      const g = Math.max(this.hf.getHeight(_b.x, _b.z), 0);
+      if (_b.y <= g) {
+        const ha = _s1.y - Math.max(this.hf.getHeight(_s1.x, _s1.z), 0);
+        const u = ha > 0 ? THREE.MathUtils.clamp(ha / (ha - (_b.y - g)), 0, 1) : 0;
+        out.copy(_s1).lerp(_b, u);
+        out.y = Math.max(this.hf.getHeight(out.x, out.z), 0);
+        return t;
       }
     }
     out.copy(_b);
@@ -543,9 +585,19 @@ export class Ordnance extends THREE.Group {
 
   get liveCount() { return this.rounds.length; }
 
-  /** True while a guided round is in the air, which is what makes a fighter break. */
+  /** True while a guided round is in the air, whoever it is chasing. */
   get missileInbound() {
     for (const r of this.rounds) if (r.kind === 'missile' && r.drop <= 0) return true;
+    return false;
+  }
+
+  /**
+   * Is anything currently chasing this particular target? Asking per target rather
+   * than globally matters: with one flag, launching at one fighter sent the whole
+   * formation into a break and dumping flares, which reads as clairvoyance.
+   */
+  chasedBy(t: DamageTarget) {
+    for (const r of this.rounds) if (r.kind === 'missile' && r.drop <= 0 && r.target === t) return true;
     return false;
   }
 }

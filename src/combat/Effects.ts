@@ -775,17 +775,20 @@ export class CombatFx extends THREE.Group {
       this.smoke.spawn(_v2, _v.set((Math.random() - 0.5) * 2, 3.5 + Math.random() * 4, (Math.random() - 0.5) * 2),
         6.0 + Math.random() * 6.0, 0.9 * radius * 0.4, 7.0 * radius * 0.5, SMOKE_BLACK, 4.5, 0.35);
     }
-    if (Math.random() < dt * 30 * intensity) {
+    if (Math.random() < dt * 18 * intensity) {
       _v2.copy(p).add(_v.set((Math.random() - 0.5) * radius * 0.8, Math.random() * 0.6, (Math.random() - 0.5) * radius * 0.8));
-      this.blasts.spawn(_v2, 0.55 + Math.random() * 0.4, 0.35 * radius, 1.0 * radius,
-        C(0.95, 0.42, 0.12), BLAST_FIRE);
+      // Smaller and cooler than a detonation: a fire that keeps a fireball's brightness
+      // is a floodlight, and it whites out everything it is supposed to be lighting.
+      this.blasts.spawn(_v2, 0.6 + Math.random() * 0.45, 0.22 * radius, 0.62 * radius,
+        C(0.60, 0.24, 0.06), BLAST_FIRE);
     }
     if (Math.random() < dt * 6) {
       _v2.copy(p); _v2.y += radius * 0.3;
       const li = this.lights.request(1);
       // The flicker is what sells a fire at night; a steady lamp reads as a street light.
+      // Scaled for a point light in an already sunlit scene, not for a photon cannon.
       this.lights.set(li, _v2, C(1.0, 0.48, 0.16),
-        (900 + Math.random() * 700) * radius * (0.25 + 0.75 * night), 40 + 20 * radius, 0.22);
+        (55 + Math.random() * 60) * radius * (0.25 + 0.75 * night), 30 + 14 * radius, 0.22);
     }
   }
 
