@@ -984,7 +984,11 @@ export class Settlement extends THREE.Group {
           // Clamped: without the max, every wall carries a negative emissive and the
           // whole town glows in the wrong direction after dark.
           float win = max(0.0, 1.0 - abs(vPart - 2.0));
-          totalEmissiveRadiance += vec3(1.0, 0.74, 0.46) * (win * vLit * uNight * 1.45);`);
+          totalEmissiveRadiance += vec3(1.0, 0.74, 0.46) * (win * vLit * uNight * 1.45);
+          // Street lamps are all on, and a lantern is a tenth the area of a window with
+          // a curtain: at the same radiance a row of them blooms into white discs.
+          float lamp = max(0.0, 1.0 - abs(vPart - 4.0));
+          totalEmissiveRadiance += vec3(1.0, 0.83, 0.58) * (lamp * uNight * 0.55);`);
     });
     this.sharedMaterial = mat;
     return mat;
@@ -1016,7 +1020,10 @@ function mergeWithMaterials(parts: { geo: THREE.BufferGeometry; mat: THREE.MeshS
     position.set(pos.array as Float32Array, vo * 3);
     if (nor) normal.set(nor.array as Float32Array, vo * 3);
     const name = p.mat.name || '';
-    const part = name.startsWith('W_') ? 0 : name.startsWith('R_') ? 1 : name.startsWith('G_') ? 2 : 3;
+    // 0 wall (tinted per instance) · 1 roof · 2 window (lit at dusk, per building)
+    // 3 detail · 4 street lamp (always lit, and far dimmer than a lit room)
+    const part = name.startsWith('W_') ? 0 : name.startsWith('R_') ? 1
+               : name.startsWith('G_') ? 2 : name.startsWith('L_') ? 4 : 3;
     const c = p.mat.color;
     for (let i = 0; i < pos.count; i++) {
       color[(vo + i) * 3] = c.r; color[(vo + i) * 3 + 1] = c.g; color[(vo + i) * 3 + 2] = c.b;

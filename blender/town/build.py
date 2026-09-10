@@ -33,6 +33,7 @@ MAT = {
     'slate':   make_mat('R_Slate',   (0.055, 0.058, 0.062), 0.66, 0.0),
     'zinc':    make_mat('R_Zinc',    (0.20, 0.205, 0.21), 0.52, 0.55),
     'glass':   make_mat('G_Window',  (0.030, 0.038, 0.048), 0.16, 0.0),
+    'lamp':    make_mat('L_Lamp',    (0.34, 0.32, 0.28), 0.22, 0.0),
     'wood':    make_mat('D_Wood',    (0.115, 0.072, 0.042), 0.86, 0.0),
     'conc':    make_mat('D_Conc',    (0.30, 0.295, 0.280), 0.88, 0.0),
     'white':   make_mat('D_White',   (0.70, 0.70, 0.68), 0.70, 0.0),
@@ -41,11 +42,11 @@ MAT = {
     'rust':    make_mat('D_Rust',    (0.20, 0.105, 0.055), 0.88, 0.0),
     'navy':    make_mat('D_Navy',    (0.055, 0.070, 0.095), 0.62, 0.0),
 }
-ORDER = ['plaster', 'stone', 'render', 'tile', 'slate', 'zinc', 'glass',
+ORDER = ['plaster', 'stone', 'render', 'tile', 'slate', 'zinc', 'glass', 'lamp',
          'wood', 'conc', 'white', 'steel', 'dark', 'rust', 'navy']
 IDX = {k: i for i, k in enumerate(ORDER)}
 MATS = [MAT[k] for k in ORDER]
-PL, ST, RE, TI, SL, ZI, GL, WD, CO, WH, STL, DK, RU, NV = (IDX[k] for k in ORDER)
+PL, ST, RE, TI, SL, ZI, GL, LP, WD, CO, WH, STL, DK, RU, NV = (IDX[k] for k in ORDER)
 
 
 # ---------------------------------------------------------------- helpers --
@@ -521,7 +522,7 @@ def build_lamp():
     mb = MB()
     mb.cyl((0, 0, 0), (0, 0, 7.2), 0.13, 0.09, 6, True, DK)
     mb.cyl((0, 0, 7.2), (0, 1.05, 7.55), 0.08, 0.07, 5, True, DK)
-    bx(mb, 0, 1.30, 0.34, 0.62, 7.30, 7.55, GL)
+    bx(mb, 0, 1.30, 0.34, 0.62, 7.30, 7.55, LP)
     bx(mb, 0, 1.30, 0.40, 0.68, 7.55, 7.66, DK)
     return obj('Lamp', mb, bevel=0.015)
 

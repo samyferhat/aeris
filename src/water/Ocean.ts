@@ -138,7 +138,7 @@ export class Ocean extends THREE.Group {
           // The chop: the four short components, as a slope, evaluated here.
           float chopFade = 1.0 - smoothstep(900.0, 5200.0, dist);
           vec2 slope = chopSlope(P.xz, uWaveScale, shoalF, vOShelter, chopFade);
-          vec3 wN = normalize(vOWaveNormal + vec3(-slope.x, 0.0, -slope.y) * 1.35
+          vec3 wN = normalize(vOWaveNormal + vec3(-slope.x, 0.0, -slope.y) * 0.85
                                            + vec3(dn.x, 0.0, dn.y) * ripple);
           wN = normalize(mix(vec3(0.0, 1.0, 0.0), wN, mix(0.55, 1.0, detailFade)));
 
@@ -222,12 +222,12 @@ export class Ocean extends THREE.Group {
           // Near the aircraft a very sharp lobe puts one enormous sparkle in every
           // other pixel and bloom turns the lot into snow; the path the eye wants is a
           // far-field effect, so the lobe widens and the strength falls as it closes in.
-          float ag = mix(0.075, 0.160, 1.0 - detailFade) + 0.45 * foam;
+          float ag = mix(0.115, 0.165, 1.0 - detailFade) + 0.45 * foam;
           float a2 = ag * ag;
           float den = ndh * ndh * (a2 - 1.0) + 1.0;
           float ggx = a2 / (PI * den * den);
           outgoingLight += uSunTransmit * uSunIntensity * Fw * ggx * uGlitter
-                         * mix(0.40, 1.0, 1.0 - detailFade)
+                         * mix(0.26, 1.0, 1.0 - detailFade)
                          * smoothstep(-0.02, 0.12, uSunDir.y) * (1.0 - foam * 0.7);
           #include <opaque_fragment>`);
     });

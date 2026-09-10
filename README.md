@@ -1,9 +1,10 @@
 # AERIS
 
 Mini simulateur de vol photoréaliste dans le navigateur. Deux appareils — un Cessna 172
-et un MiG-29 — un archipel d'environ 10 km², une piste : décoller, voler, se poser.
+et un MiG-29 — un archipel de vingt-cinq kilomètres avec une ville portuaire, trois
+aérodromes et un détroit à passer sous un pont : décoller, voler, se poser.
 
-![AERIS](docs/hero.jpg)
+![AERIS](docs/31-port.jpg)
 
 ## Lancer
 
@@ -95,8 +96,11 @@ donc un manche tiré à fond mène à un enfoncement, pas à un départ en vrill
 ```
 src/
   core/       Noise (simplex, fBm, ridged) · Input clavier/souris/manette · Engine (rendu, CSM)
-  world/      Heightfield · Erosion hydraulique · Terrain (chunks LOD) · Vegetation · Foliage · Runway
-  water/      Ocean (Gerstner, écume, profondeur)
+  world/      Archipelago (îles, baies, chenal, lieux — arithmétique pure, exécutable sous node)
+              Heightfield · Erosion hydraulique · Terrain (quadtree) · Vegetation · Foliage
+              Runway (les trois aérodromes) · Settlement (rues, parcelles, port, entaille du sol)
+              Life (bateaux, trafic, oiseaux, fumées, phare)
+  water/      Ocean (houle, clapot, réfraction du fond, déferlement, sillages)
   sky/        Atmosphere (Rayleigh/Mie) · AerialPerspective · Environment (IBL dynamique) · CloudNoise
   aircraft/   AircraftConfig (tout ce qui distingue les deux appareils) · FlightModel
               Aircraft (animation des gouvernes, du train, des tuyères) · Cameras
@@ -106,6 +110,7 @@ src/
               Ordnance (obus, missiles, roquettes, bombes) · Targeting (réticule, verrouillage)
               Effects (fumée, étincelles, traçantes, explosions, débris) · Targets · Enemy
   fx/         Pipeline (post-traitement complet) · Particles · Afterburner · JetEffects
+              Weather (grains de pluie, tremblement de chaleur)
   audio/      Audio (piston ou turbine, vent, Doppler, réverbération, bang supersonique)
   ui/         HUD · CombatHud (réticule, verrouillage, alerte) · HelpPanel (commandes)
               TimeSlider · Selection (choix de l'appareil) · LoadoutScreen (emport)
@@ -116,22 +121,130 @@ blender/      Scripts de modélisation du Cessna, pilotés via le serveur MCP de
 blender/mig/  Idem pour le MiG-29
 blender/weapons/  Les dix emports, exportés en un seul stores.glb
 blender/targets/  Camions, blindés, radar, cuves, patrouilleur, hangar, tour
-public/       Textures CC0, HDRI, cessna.glb
+blender/town/     Vingt-huit archétypes : maisons, immeubles, église, hangars, grues,
+                  bateaux, phare, pylône et tablier de pont, voitures, réverbères, épave
+tools/mapview.mjs Carte de l'archipel en deux secondes, dessinée par le code du jeu
+public/       Textures CC0, HDRI, cessna.glb, town.glb
 ```
+
+## Le monde
+
+Huit îles volcaniques sur vingt-six kilomètres de côté, environ vingt-cinq du bout de
+l'archipel à l'autre bout. Tout est généré, rien n'est un jeu de données réelles.
+
+**La Grande Île** porte le pic principal (un peu plus de mille mètres), l'aérodrome
+principal sur sa plaine orientale, et la ville portuaire au fond d'une baie abritée.
+**Ponant** et **Levant** ont chacune un village et une piste courte. Restent l'**Îlot du
+Phare**, le **Banc de l'Épave** où un caboteur s'est mis au sec, les **Aiguilles** et un
+sec au sud-est.
+
+**Le détroit** sépare la Grande Île de l'**Île du Détroit** : un chenal de trois cent
+cinquante mètres entre des parois qui montent à deux cent cinquante, avec un pont
+suspendu dont le tablier est à cent soixante-huit mètres. Il n'est pas là pour décorer :
+il relie la haute mer à la baie du port, donc c'est le chemin court quand on rentre par
+l'ouest, et on débouche au-dessus de la ville.
+
+### La géométrie
+
+Une île est une union de capsules en distances signées ; une baie et un chenal en sont
+soustraits. La largeur de la montée côtière décide seule si le rivage est une plage ou
+une falaise : c'est le même opérateur, avec quarante mètres de course au lieu de trois
+cents. Les entailles sont mesurées en coordonnées monde et non dans l'espace déformé des
+côtes, parce qu'une baie peut se déplacer d'un kilomètre mais pas le détroit.
+
+L'érosion hydraulique tourne sur une copie deux fois moins fine et revient en delta : ce
+qu'elle produit — réseau de drainage, fonds de vallée, cônes de déjection — se mesure en
+centaines de mètres et est entièrement résolu à vingt-cinq. Les parois du détroit et les
+pistes sont exclues du masque d'érosion : une goutte lâchée sur une face à quatre-vingts
+degrés la ramène volontiers à son angle de repos.
+
+Le terrain est un quadtree. Une grille uniforme assez fine pour les falaises ferait des
+dizaines de milliers de tuiles ; assez grossière pour être dessinée, elle transformerait
+chaque crête lointaine en mesa. Les fissures entre deux niveaux voisins sont recousues
+en rabattant un sommet sur deux du bord fin sur la ligne que trace le voisin grossier —
+pas de jupe, qui sur un dévers passe toujours devant la surface du voisin.
+
+### L'eau
+
+C'est soixante-dix pour cent de l'image, donc elle est construite comme l'eau
+fonctionne. Le rayon de vue est réfracté à la surface, suivi jusqu'au fond, et ce qui
+remonte est atténué par Beer-Lambert sur la distance parcourue dans l'eau. L'eau claire
+absorbe le rouge vingt fois plus vite que le bleu : le sable sous un mètre reste du
+sable, sous cinq mètres il est turquoise, sous trente il a disparu. Tout le dégradé de
+profondeur sort de trois coefficients, et il se reteinte tout seul quand la lumière
+change.
+
+Le fond est fait de sable, de patates de corail, d'herbiers et de roche, choisis par la
+profondeur et la pente, avec un réseau de caustiques qui se défocalise en descendant.
+
+Le déferlement n'est pas une texture. Une vague casse là où le fond remonte sous elle —
+la profondeur ici comparée à celle de cent trente mètres au large — et la houle réfracte
+en s'échouant, donc la phase du ressac est prise sur la profondeur elle-même : les lignes
+blanches suivent exactement le récif, avancent vers la côte, et tiennent en permanence
+sur le tombant.
+
+La houle est portée par la géométrie, le clapot par des normales calculées au pixel : à
+quatre mètres de longueur d'onde sur des quads de vingt, une vague ne devient pas petite,
+elle devient un damier aligné sur le maillage. Le chemin scintillant du soleil est un
+lobe spéculaire dont la largeur croît avec l'empreinte du pixel, parce qu'un pixel de mer
+lointaine contient toute une distribution de pentes.
+
+Chaque coque laisse un sillage de Kelvin — l'eau brassée dans l'axe et les deux bras
+plumeux à dix-neuf degrés et demi. L'avion aussi, sous vingt-cinq mètres.
+
+### Ce qui est construit
+
+Vingt-huit archétypes sortis de Blender, réutilisés trois mille fois. Chaque matériau
+porte son rôle dans son nom et le moteur le lit : les murs prennent la couleur de
+l'instance, les toits un tiers de cette couleur, les fenêtres s'allument au crépuscule
+bâtiment par bâtiment.
+
+Une ville de coteau n'est pas des maisons éparpillées sur une pente. Ce sont des rues qui
+suivent les courbes de niveau parce qu'une rue ne grimpe pas plus vite qu'un camion, des
+parcelles taillées à plat parce qu'une maison ne se pose pas sur un dévers, et une
+densité qui décroît depuis l'eau — vieille ville sur le port, immeubles derrière, maisons
+sur la pente, fermes au bord. Le terrain est entaillé avant d'être maillé, donc les
+terrasses sont dans le sol et non cachées sous les bâtiments.
+
+Le bâti est aussi peint dans une carte de couverture que lit le shader de terrain : une
+ville vue de dix kilomètres reste une ville, grise et quadrillée, et non un flanc vert où
+des maisons apparaissent quand on s'approche.
+
+Les routes sont tracées par un routeur qui, à chaque pas, prend le cap qui se rapproche
+le plus du but pour le moins de dénivelé — d'où une corniche qui longe la côte et
+contourne les ravins.
+
+### Ce qui vit
+
+Des cargos et des chalutiers traversent entre les îles, des barques sont amarrées aux
+quais, des voitures roulent sur la corniche, le phare tourne, quelques cheminées fument,
+et une volée de mouettes décolle quand on passe bas.
+
+L'air poussé le long d'un versant condense : au-dessus des hautes terres la base des
+nuages descend et la couverture monte, donc les sommets portent une calotte quand la mer
+autour est dégagée. Les grains sont des colonnes sombres et striées sous un nuage, vues
+de l'extérieur. L'après-midi, l'air chaud au ras du sol fait trembler le bout lointain
+de l'île.
+
+Les bâtiments, les grues et le tablier du pont sont solides. Le tablier a une hauteur et
+pas seulement une emprise : tout l'intérêt du détroit est de passer dessous.
 
 ## Ce qui tourne sous le capot
 
-**Terrain.** Un champ de hauteurs de 1024² est généré à partir de masques d'îles
-déformés, de massifs à basse fréquence et de bruit ridgé, puis érodé par 156 000
-gouttes d'eau (modèle de Beyer). C'est l'érosion qui donne les vallées, les lignes de
-crête et les cônes de déjection ; sans elle le bruit seul reste une hérissure. Le rendu
-est découpé en tuiles à cinq niveaux de détail, dont les bords sont calés sur une grille
-commune : les fissures entre niveaux disparaissent sans jupe.
+**Terrain.** Champ de hauteurs de 2048² sur vingt-six kilomètres, érodé par gouttes
+d'eau (modèle de Beyer) sur une copie deux fois moins fine, réinjectée en delta. Rendu
+par quadtree : un nœud se subdivise tant qu'il est plus près que trois fois sa largeur.
 
-**Matière.** Cinq jeux PBR (sable, herbe, forêt, éboulis, paroi) mélangés par altitude,
-pente et bruit macro, la paroi en triplanaire. Chaque jeu est échantillonné deux fois
-avec des rotations différentes et mélangé par un bruit lent : la grille de répétition
-disparaît sans le coût d'un pavage stochastique.
+**Matière.** Quatre jeux PBR (sable, herbe, forêt, paroi) mélangés par altitude, pente et
+bruit macro, la paroi en triplanaire et rejouée à plat pour l'éboulis. Les jeux ont été
+photographiés en climat sec — l'herbe est kaki, la « forêt » est brune — donc chaque
+couche garde sa luminance, normalisée autour de sa propre moyenne, et reçoit la couleur
+que l'endroit doit avoir. Au-delà de deux kilomètres il n'y a plus d'arbres instanciés :
+ce qui fait lire une canopée d'en haut n'est pas sa couleur mais son grumeau, donc un
+champ à l'échelle d'une couronne devient une pente et sa propre occlusion.
+
+Le shader de terrain est à seize échantillonneurs, ce qui est la limite. Le dix-septième
+ne se plaint pas : le programme ne se lie pas et le sol devient blanc.
 
 **Ciel.** Diffusion de Rayleigh et Mie intégrée par raymarching sur le dôme, avec un
 terme de diffusion multiple qui blanchit l'horizon au lieu de le laisser virer au jaune.
@@ -147,9 +260,9 @@ loin où la perspective aérienne a déjà tout lavé. À pas constant il aurait
 pour atteindre l'horizon, soit un pas plus large que les cumulus eux-mêmes, et le bruit
 de décorrélation censé masquer ça ressortait en damier sur toute la couche.
 
-**Océan.** Six vagues de Gerstner en espace monde, normales de détail défilantes, écume
-de crête et de rivage calculée depuis la profondeur d'eau, courbure terrestre pour que
-la mer épouse l'horizon de l'atmosphère.
+**Océan.** Voir « L'eau » plus haut : réfraction et extinction jusqu'au fond, houle en
+géométrie et clapot au pixel, déferlement sur la remontée du fond, sillages de Kelvin,
+courbure terrestre pour que la mer épouse l'horizon de l'atmosphère.
 
 **Avion.** La cellule vient de Blender via son serveur MCP. La peinture, elle, est
 procédurale et évaluée dans le repère de l'avion : bandes, immatriculation, lignes de
@@ -272,6 +385,25 @@ convaincant de tout le mixage.
 
 ## Images
 
+![Le détroit](docs/30-detroit.jpg)
+*Le détroit, en approche par l'ouest : trois cent cinquante mètres d'eau entre deux
+parois, et le pont suspendu au fond.*
+
+![La ville portuaire](docs/31-port.jpg)
+*La ville au fond de sa baie, les quartiers qui montent le coteau, le pont au loin.*
+
+![L'archipel](docs/32-archipel.jpg)
+*Ponant depuis le nord-est : platier corallien, tombant, sillage d'un caboteur.*
+
+![Calotte orographique](docs/33-calotte.jpg)
+*Le nuage se forme sur le pic pendant que la mer autour reste dégagée.*
+
+![Aube](docs/34-aube.jpg)
+*Contre-jour du matin sur la crête ouest.*
+
+![La ville de nuit](docs/35-nuit.jpg)
+*Les fenêtres se sont allumées une par une, les réverbères suivent les rues.*
+
 ![Post-combustion](docs/11-mig-postcombustion.jpg)
 *MiG-29 plein réchauffe au-dessus de l'archipel, caméra cinématique.*
 
@@ -303,7 +435,19 @@ convaincant de tout le mixage.
   seulement par requêtes de temps GPU : les chiffres relatifs entre passes sont fiables,
   la valeur absolue ne l'est pas.
 - Les véhicules et les bâtiments sont construits pour la silhouette, à la distance d'une
-  passe de mitraillage. De près, ils ne tiennent pas la comparaison avec la cellule.
+  passe de mitraillage ou d'un survol à trois cents pieds. De près, ils ne tiennent pas
+  la comparaison avec la cellule.
+- Le brief demandait des imposteurs entre un et quatre kilomètres. Ils ne sont pas là :
+  les vingt-huit archétypes totalisent quatre mille polygones, si bien que trois mille
+  instances coûtent moins cher en géométrie qu'une passe de rendu d'atlas d'imposteurs
+  en coûterait à charger. La géométrie va donc jusqu'à trois kilomètres quatre, où elle
+  est repliée sur son origine dans le vertex shader, et au-delà c'est la carte de
+  couverture peinte dans le terrain qui tient le rôle.
+- Le tunnel annoncé dans le brief n'est pas creusé. Le portail est modélisé, mais le
+  routeur de routes ne sait pas encore décider qu'il vaut mieux traverser une crête que
+  la contourner.
+- Les rues de la ville sont dessinées et les bâtiments s'alignent dessus, mais il n'y a
+  pas de plan : deux terrasses voisines ne sont reliées par aucun escalier.
 - Les chasseurs adverses ne se servent que du missile. Ils n'ont pas de canon, et ils ne
   cherchent jamais à se placer derrière : ils fuient, virent et se défendent.
 
