@@ -501,6 +501,10 @@ export class Audio {
     return buf;
   }
 
+  /** 0 = open sea, 1 = a hard surface close on every side. */
+  private enclosure = 0;
+  setEnclosure(v: number) { this.enclosure = Math.max(0, Math.min(1, v)); }
+
   /** Exponentially decaying noise burst — a serviceable reverb impulse. */
   private impulse(ctx: AudioContext, seconds: number, decay: number, dampHz: number): AudioBuffer {
     const n = Math.floor(ctx.sampleRate * seconds);
@@ -619,7 +623,10 @@ export class Audio {
 
     // --- space ---------------------------------------------------------------
     this.cockpitSend.gain.setTargetAtTime(inside ? 0.30 : 0.0, t, 0.25);
-    this.outsideSend.gain.setTargetAtTime(inside ? 0.0 : 0.16, t, 0.25);
+    // Outside, how much comes back depends on what there is to come back off. Over open
+    // water there is nothing; between the walls of the strait, or down a street, there
+    // is a great deal, and that difference is most of what tells you where you are.
+    this.outsideSend.gain.setTargetAtTime(inside ? 0.0 : 0.055 + 0.42 * this.enclosure, t, 0.45);
     this.dry.gain.setTargetAtTime(inside ? 0.85 : 1.0, t, 0.25);
     this.cabinFilter.frequency.setTargetAtTime(inside ? 2400 : 18000, t, 0.25);
   }

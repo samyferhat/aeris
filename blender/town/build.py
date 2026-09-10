@@ -575,6 +575,18 @@ def build_wreck():
     return obj('Wreck', mb, bevel=0.04)
 
 
+def build_bird():
+    """A seabird, as two swept wings and a body. Never seen closer than thirty metres,
+    so what matters is the silhouette and that the wings can be flapped by a shader."""
+    mb = MB()
+    v = [(0.0, 0.34, 0.0), (0.0, -0.30, 0.0), (0.0, 0.05, 0.05),
+         (-0.62, 0.16, 0.02), (-0.30, -0.02, 0.03),
+         (0.62, 0.16, 0.02), (0.30, -0.02, 0.03)]
+    f = [[0, 1, 2], [2, 4, 3], [2, 3, 0], [2, 5, 6], [2, 0, 5]]
+    mb.add(v, f, DK)
+    return obj('Bird', mb, bevel=0.0)
+
+
 def build_tunnel_portal():
     """A portal cut into a hillside: a concrete headwall with an arched mouth."""
     mb = MB()
@@ -604,7 +616,7 @@ BUILT = [
     build_fishing_boat(), build_cargo_ship(), build_skiff(),
     build_lighthouse(), build_bridge_tower(), build_bridge_deck(),
     build_car(), build_van(), build_lamp(), build_pier(), build_breakwater(),
-    build_buoy(), build_wreck(), build_tunnel_portal(),
+    build_buoy(), build_wreck(), build_tunnel_portal(), build_bird(),
 ]
 x = 0.0
 for ob in BUILT:

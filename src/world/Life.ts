@@ -29,6 +29,8 @@ interface Vessel {
   bobPhase: number;
 }
 
+interface Bird { x: number; y: number; z: number; vx: number; vy: number; vz: number; phase: number; alive: number }
+
 interface Vehicle {
   street: number;
   arc: number;
@@ -49,6 +51,11 @@ export class Life extends THREE.Group {
   private streets: Street[] = [];
   private arcs: number[][] = [];
   readonly wakes: Wake[] = [];
+  private birds: Bird[] = [];
+  private birdMesh: THREE.InstancedMesh | null = null;
+  private flapAttr: THREE.InstancedBufferAttribute | null = null;
+  private smoke: Smoke | null = null;
+  private lastFlush = new THREE.Vector3(1e9, 0, 0);
   private beam: THREE.Mesh | null = null;
   private beamMat: THREE.MeshBasicMaterial | null = null;
   private t = 0;
@@ -87,6 +94,54 @@ export class Life extends THREE.Group {
       this.add(mesh);
     }
     this.buildLighthouse();
+    this.buildBirds(geos.get('Bird'));
+    this.smoke = new Smoke(this.settlement);
+    this.add(this.smoke);
+  }
+
+  /**
+   * Gulls. They sit on the ground doing nothing until an aeroplane comes over low, and
+   * then the whole flock goes up at once — which is the only time anybody notices birds
+   * from a cockpit, and the reason they are worth having at all.
+   */
+  private buildBirds(geo?: THREE.BufferGeometry) {
+    if (!geo) return;
+    const N = 90;
+    const mesh = new THREE.InstancedMesh(geo.clone(), this.settlement.buildingMaterial, N);
+    const tints = new Float32Array(N * 3).fill(0.75), seeds = new Float32Array(N);
+    const flap = new Float32Array(N);
+    for (let i = 0; i < N; i++) seeds[i] = this.rnd();
+    mesh.geometry.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
+    mesh.geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+    this.flapAttr = new THREE.InstancedBufferAttribute(flap, 1);
+    mesh.geometry.setAttribute('aFlap', this.flapAttr);
+    mesh.castShadow = false;
+    mesh.frustumCulled = false;
+    mesh.count = 0;
+    this.birdMesh = mesh;
+    this.add(mesh);
+    for (let i = 0; i < N; i++) this.birds.push({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, phase: this.rnd() * 6.28, alive: 0 });
+  }
+
+  /** Puts a flock up out of the ground ahead of the aircraft. */
+  private flush(at: THREE.Vector3, vel: THREE.Vector3) {
+    const n = 10 + Math.floor(this.rnd() * 12);
+    const ax = Math.atan2(vel.z, vel.x);
+    let put = 0;
+    for (const b of this.birds) {
+      if (b.alive > 0) continue;
+      const a = this.rnd() * Math.PI * 2, r = this.rnd() * 60;
+      b.x = at.x + Math.cos(a) * r;
+      b.z = at.z + Math.sin(a) * r;
+      b.y = Math.max(0, this.hf.getHeight(b.x, b.z)) + 1 + this.rnd() * 4;
+      // Away from the aeroplane and up: a startled flock does not form up first.
+      const away = ax + Math.PI + (this.rnd() - 0.5) * 1.6;
+      const sp = 9 + this.rnd() * 7;
+      b.vx = Math.cos(away) * sp; b.vz = Math.sin(away) * sp;
+      b.vy = 4 + this.rnd() * 5;
+      b.alive = 9 + this.rnd() * 6;
+      if (++put >= n) break;
+    }
   }
 
   // ---- routes --------------------------------------------------------------
@@ -209,7 +264,7 @@ export class Life extends THREE.Group {
 
   // ---- per frame -----------------------------------------------------------
 
-  update(dt: number, night: number, playerPos: THREE.Vector3, playerVel: THREE.Vector3) {
+  update(dt: number, night: number, playerPos: THREE.Vector3, playerVel: THREE.Vector3, pixelScale = 600) {
     this.t += dt;
     for (const k of this.counts.keys()) this.counts.set(k, 0);
     this.wakes.length = 0;
@@ -300,6 +355,40 @@ export class Life extends THREE.Group {
       mesh.instanceMatrix.needsUpdate = true;
     }
 
+    // ---- birds ------------------------------------------------------------
+    if (this.birdMesh && this.flapAttr) {
+      const groundHere = this.hf.getHeight(playerPos.x, playerPos.z);
+      const low = playerPos.y - Math.max(0, groundHere) < 130 && groundHere > 2;
+      if (low && this.lastFlush.distanceToSquared(playerPos) > 620 * 620) {
+        this.lastFlush.copy(playerPos);
+        const sp = Math.hypot(playerVel.x, playerVel.z) || 1;
+        this.flush(p.set(playerPos.x + playerVel.x / sp * 260, 0, playerPos.z + playerVel.z / sp * 260), playerVel);
+      }
+      let n = 0;
+      const flap = this.flapAttr.array as Float32Array;
+      for (const b of this.birds) {
+        if (b.alive <= 0) continue;
+        b.alive -= dt;
+        b.vy += (2.2 - b.vy) * dt * 0.7;             // level off into a climb-out
+        b.vx *= 1 - dt * 0.12; b.vz *= 1 - dt * 0.12;
+        b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+        b.phase += dt * 11;
+        if (n >= this.birds.length) break;
+        q.setFromAxisAngle(up, -Math.atan2(b.vz, b.vx) + Math.PI / 2);
+        p.set(b.x, b.y, b.z);
+        sc.setScalar(1.6);
+        this.birdMesh.setMatrixAt(n, m.compose(p, q, sc));
+        flap[n] = Math.sin(b.phase);
+        n++;
+      }
+      sc.set(1, 1, 1);
+      this.birdMesh.count = n;
+      this.birdMesh.instanceMatrix.needsUpdate = true;
+      this.flapAttr.needsUpdate = true;
+    }
+    this.smoke?.setPixelScale(pixelScale);
+    this.smoke?.update(dt, playerPos, this.t);
+
     // ---- the light --------------------------------------------------------
     if (this.beam && this.beamMat) {
       this.beam.rotation.y = -this.t * 0.42;
@@ -307,4 +396,110 @@ export class Life extends THREE.Group {
       this.beam.visible = night > 0.02;
     }
   }
+}
+
+
+/**
+ * Chimney smoke.
+ *
+ * A few dozen houses have a fire going. Each particle belongs to a chimney and is
+ * recycled back to it when it has drifted away, so the plume is continuous without
+ * anything having to be spawned or allocated per frame. Only the chimneys within a
+ * kilometre and a half take part; beyond that a plume is a pixel.
+ */
+class Smoke extends THREE.Points {
+  private chimneys: THREE.Vector3[] = [];
+  readonly chimneys2 = 0;
+  private life: Float32Array;
+  private home: Int32Array;
+  private pos: Float32Array;
+  private seed: Float32Array;
+  private static COUNT = 340;
+
+  constructor(settlement: Settlement) {
+    const N = Smoke.COUNT;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(N * 3);
+    const age = new Float32Array(N);
+    const seed = new Float32Array(N);
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aAge', new THREE.BufferAttribute(age, 1));
+    geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+      uniforms: { uPixelScale: { value: 600 }, uTint: { value: new THREE.Color(0.55, 0.54, 0.52) } },
+      vertexShader: `
+        attribute float aAge;
+        attribute float aSeed;
+        uniform float uPixelScale;
+        varying float vAge;
+        varying float vSeed;
+        void main() {
+          vAge = aAge; vSeed = aSeed;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float r = 2.4 + aAge * 11.0;
+          gl_PointSize = clamp(r * uPixelScale / max(-mv.z, 1.0), 1.0, 220.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 uTint;
+        varying float vAge;
+        varying float vSeed;
+        void main() {
+          vec2 d = gl_PointCoord - 0.5;
+          float r2 = dot(d, d);
+          if (r2 > 0.25) discard;
+          float a = (1.0 - smoothstep(0.04, 0.25, r2)) * 0.40 * (1.0 - vAge) * smoothstep(0.0, 0.10, vAge);
+          gl_FragColor = vec4(uTint * (0.85 + 0.3 * vSeed), a);
+        }`,
+    });
+    super(geo, mat);
+    this.frustumCulled = false;
+    this.life = age;
+    this.pos = pos;
+    this.seed = seed;
+    this.home = new Int32Array(N);
+    // Which houses have a fire lit. Deterministic, so the same chimneys smoke every time.
+    let k = 0;
+    for (const p of settlement.placements) {
+      if (k >= 64) break;
+      if (p.seed > 0.045) continue;
+      if (!/^(Town_|House_|Farm|Villa)/.test(p.type)) continue;
+      this.chimneys.push(new THREE.Vector3(p.x, p.y + 12, p.z));
+      k++;
+    }
+    for (let i = 0; i < N; i++) {
+      this.home[i] = this.chimneys.length ? i % this.chimneys.length : -1;
+      this.life[i] = i / N;
+      this.seed[i] = (i * 0.61803) % 1;
+    }
+  }
+
+  update(dt: number, camera: THREE.Vector3, t: number) {
+    const N = Smoke.COUNT;
+    for (let i = 0; i < N; i++) {
+      const h = this.home[i];
+      if (h < 0) continue;
+      const c = this.chimneys[h];
+      const far = c.distanceToSquared(camera) > 1700 * 1700;
+      this.life[i] += dt * 0.085;
+      if (this.life[i] >= 1 || far) {
+        if (far) { this.life[i] = 1.0; this.pos[i * 3 + 1] = -9999; continue; }
+        this.life[i] -= 1;
+        this.pos[i * 3] = c.x + (this.seed[i] - 0.5) * 0.6;
+        this.pos[i * 3 + 1] = c.y;
+        this.pos[i * 3 + 2] = c.z + (this.seed[i] * 7 % 1 - 0.5) * 0.6;
+      }
+      // Rise, then lean over into the wind as it cools and slows.
+      const a = this.life[i];
+      this.pos[i * 3] += (2.6 * a + 0.3) * dt * Math.cos(t * 0.07 + this.seed[i]) * 1.4 + 1.9 * dt;
+      this.pos[i * 3 + 1] += (3.4 * (1 - a * 0.7)) * dt;
+      this.pos[i * 3 + 2] += 1.2 * dt + (this.seed[i] - 0.5) * dt * 1.4;
+    }
+    (this.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    (this.geometry.getAttribute('aAge') as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  setPixelScale(v: number) { (this.material as THREE.ShaderMaterial).uniforms.uPixelScale.value = v; }
 }

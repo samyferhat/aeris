@@ -20,6 +20,7 @@ import { CombatHud } from './ui/CombatHud';
 import { HelpPanel } from './ui/HelpPanel';
 import { TimeSlider } from './ui/TimeSlider';
 import { Pipeline } from './fx/Pipeline';
+import { Weather } from './fx/Weather';
 import { Particles } from './fx/Particles';
 import { Audio } from './audio/Audio';
 import { Afterburner } from './fx/Afterburner';
@@ -142,7 +143,6 @@ async function boot() {
     rig.setConfig(cfg);
     audio.setProfile(cfg.propulsion);
     hud.setConfig(cfg);
-    post.heatHaze = cfg.propulsion === 'turbofan';
     if (!aircraft) return;
     scene.add(aircraft);
     const wl = aircraft.wheelLocals();
@@ -280,6 +280,11 @@ async function boot() {
   progress(0.92, 'Post-traitement');
   const post = new Pipeline(renderer, scene, camera);
   post.setTerrain(hf.texture, WORLD_SIZE);
+  // The heat pass now carries the shimmer over the islands as well as the jet exhaust,
+  // so it runs whatever is being flown.
+  post.heatHaze = true;
+  const weather = new Weather(hf, post.cloudBase);
+  scene.add(weather);
   const hud = new HUD();
   const combatHud = new CombatHud(document.getElementById('hud')!);
   const help = new HelpPanel();
@@ -388,10 +393,11 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, settlement, life, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, settlement, life, weather, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
 
   let last = performance.now();
   let turbulence = 0;
+  let enclosure = 0;
   let tunnel = 0;
 
   /** One simulation + render step. Split out of the rAF loop so tools can drive it. */
@@ -463,7 +469,11 @@ async function boot() {
     post.dofEnabled = rig.mode === 'cockpit';
     terrain.update(camera);
     settlement.update(dt, atmosphere.night);
-    if (!frozen) life.update(dt, atmosphere.night, fm.position, fm.velocity);
+    weather.update(dt, camera, atmosphere.hour, ocean.wind);
+    if (!frozen) {
+      const px = renderer.getDrawingBufferSize(_size).y / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+      life.update(dt, atmosphere.night, fm.position, fm.velocity, px);
+    }
     ocean.setWakes(life.wakes);
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
@@ -483,6 +493,20 @@ async function boot() {
         atmosphere.night, fm.config.propulsion);
       combatFx.update(dt, camera, atmosphere.sunDir, atmosphere.sunColor, post.ambientTop, pixelScale,
         (x, z) => Math.max(0, hf.getHeight(x, z)));
+    }
+    // How enclosed the aircraft is, for the reverb: ground standing above it nearby, and
+    // whether it is over a town. Filtered, because flying past a headland should not
+    // switch the acoustics of the world in one frame.
+    {
+      let walls = 0;
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4;
+        const h = hf.getHeight(fm.position.x + Math.cos(a) * 420, fm.position.z + Math.sin(a) * 420);
+        if (h > fm.position.y - 25) walls++;
+      }
+      const target = Math.min(1, walls / 8 + settlement.builtAt(fm.position.x, fm.position.z) * 0.5);
+      enclosure += (target - enclosure) * (1 - Math.exp(-dt * 0.7));
+      audio.setEnclosure(enclosure);
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     help.update(dt, input);

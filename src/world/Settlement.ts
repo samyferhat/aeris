@@ -655,7 +655,61 @@ export class Settlement extends THREE.Group {
       const t = (i - (n - 1) / 2) * 20;
       this.place('BridgeDeck', bx + nx * t, bz + nz * t, rot, 1, S.deckHeight);
     }
+    this.buildBridgeCables(bx, bz, nx, nz, S.halfWidth + 105, S.deckHeight, S.towerHeight);
   }
+
+  /**
+   * The main cables and their hangers.
+   *
+   * Built here rather than in Blender because a catenary is a function of the span it
+   * hangs across, and the span is a property of the strait, not of a model. Without them
+   * the crossing reads as two towers with a plank between them; with them it reads as
+   * the thing you are about to fly under.
+   */
+  private buildBridgeCables(bx: number, bz: number, nx: number, nz: number,
+                            half: number, deck: number, towerH: number) {
+    const pts: THREE.Vector3[] = [];
+    const top = deck + towerH - 4;
+    const sag = towerH - 10;
+    const N = 46;
+    const pos: number[] = [];
+    const push = (a: THREE.Vector3, b: THREE.Vector3) => {
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    };
+    for (const side of [-1, 1] as const) {
+      // The cable runs along the deck, offset to its edge; the deck is 18 m wide.
+      const ox = -nz * side * 8.6, oz = nx * side * 8.6;
+      let prev: THREE.Vector3 | null = null;
+      for (let i = 0; i <= N; i++) {
+        const u = (i / N) * 2 - 1;                      // -1 at one tower, +1 at the other
+        const t = u * half;
+        // A catenary is close enough to a parabola over one span, and a parabola is one
+        // multiply. The eye is checking the sag, not the transcendental.
+        const y = top - sag * (1 - u * u);
+        const p = new THREE.Vector3(bx + nx * t + ox, y, bz + nz * t + oz);
+        if (prev) push(prev, p);
+        prev = p;
+        pts.push(p);
+        // Hangers, every other station, down to the deck.
+        if (i % 2 === 0 && Math.abs(u) < 0.97 && y > deck + 2) {
+          push(p, new THREE.Vector3(p.x, deck + 1.2, p.z));
+        }
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeBoundingSphere();
+    const mat = new THREE.LineBasicMaterial({ color: 0x2b2c2e });
+    (mat as any)._apKey = 'cable';
+    applyAerialPerspective(mat);
+    const lines = new THREE.LineSegments(g, mat);
+    lines.frustumCulled = false;
+    this.add(lines);
+    this.cableMat = mat;
+    void pts;
+  }
+
+  private cableMat: THREE.Material | null = null;
 
   // ---- placement -----------------------------------------------------------
 
@@ -890,6 +944,7 @@ export class Settlement extends THREE.Group {
           attribute vec2 aMat;      // x: 0 wall 1 roof 2 window 3 detail   y: roughness
           attribute vec3 aTint;
           attribute float aSeed;
+          attribute float aFlap;      // wing beat, on the birds; zero everywhere else
           uniform float uCull;
           varying float vPart;
           varying float vRough;
@@ -905,6 +960,9 @@ export class Settlement extends THREE.Group {
           // Which buildings have their lights on tonight, and how warm they are.
           vLit = step(0.42, fract(aSeed * 71.317));`)
         .replace('#include <project_vertex>', `
+          // Wing beat. Buildings have no aFlap attribute, so it reads as zero for them
+          // and this line costs them one multiply.
+          transformed.z += abs(transformed.x) * aFlap * 0.55;
           #ifdef USE_INSTANCING
             // Beyond the cull distance the instance is collapsed onto its own origin.
             // The triangles still go through the vertex stage but cover no pixels, which

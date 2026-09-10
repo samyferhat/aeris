@@ -219,11 +219,15 @@ export class Ocean extends THREE.Group {
           // towards the viewer: one GGX lobe whose width grows with the pixel footprint.
           vec3 Hv = normalize(V + uSunDir);
           float ndh = max(dot(wN, Hv), 0.0);
-          float ag = mix(0.030, 0.155, 1.0 - detailFade) + 0.45 * foam;
+          // Near the aircraft a very sharp lobe puts one enormous sparkle in every
+          // other pixel and bloom turns the lot into snow; the path the eye wants is a
+          // far-field effect, so the lobe widens and the strength falls as it closes in.
+          float ag = mix(0.075, 0.160, 1.0 - detailFade) + 0.45 * foam;
           float a2 = ag * ag;
           float den = ndh * ndh * (a2 - 1.0) + 1.0;
           float ggx = a2 / (PI * den * den);
           outgoingLight += uSunTransmit * uSunIntensity * Fw * ggx * uGlitter
+                         * mix(0.40, 1.0, 1.0 - detailFade)
                          * smoothstep(-0.02, 0.12, uSunDir.y) * (1.0 - foam * 0.7);
           #include <opaque_fragment>`);
     });
