@@ -132,6 +132,8 @@ export class Settlement extends THREE.Group {
     this.planHarbour();
     this.planStreetLights();
     this.carve();
+    // The strips get the last word on the ground they stand on.
+    this.hf.carveAirfields();
     this.buildRoads();
     this.rasterise();
   }
@@ -255,8 +257,13 @@ export class Settlement extends THREE.Group {
     const bx = sa[0] + (sb[0] - sa[0]) * S.at, bz = sa[1] + (sb[1] - sa[1]) * S.at;
     const dx = sb[0] - sa[0], dz = sb[1] - sa[1], L = Math.hypot(dx, dz);
     const nx = -dz / L, nz = dx / L;
+    // To the apron, not to the middle of the runway.
+    const af0 = AIRFIELDS[0];
+    const a0 = (af0.heading - 90) * Math.PI / 180;
+    const apx = af0.x + (af0.apron ? af0.apron.dx : 0) * Math.cos(a0) - (af0.apron ? af0.apron.dz : 0) * Math.sin(a0);
+    const apz = af0.z + (af0.apron ? af0.apron.dx : 0) * Math.sin(a0) + (af0.apron ? af0.apron.dz : 0) * Math.cos(a0);
     const ends: [number, number][] = [
-      [AIRFIELDS[0].x, AIRFIELDS[0].z],
+      [apx, apz + 120],
       [bx + nx * (S.halfWidth + 260), bz + nz * (S.halfWidth + 260)],
     ];
     for (const v of this.villageSites) if (Math.hypot(v.x - p.x, v.z - p.z) < 9000) ends.push([v.x, v.z]);
@@ -803,6 +810,22 @@ export class Settlement extends THREE.Group {
         for (let k = 0; k <= n; k++) {
           stamp(lerp(a.x, b.x, k / n), lerp(a.y, b.y, k / n), st.width * 0.8 + 4, 1, 0.55);
         }
+      }
+    }
+    // The airfields are hard standing too. Left out of this map they are grass as far
+    // as the vegetation is concerned, and a forest grows down the middle of the runway.
+    for (const af of AIRFIELDS) {
+      const ang = (af.heading - 90) * Math.PI / 180;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const n = Math.ceil(af.length / (cell * 0.5));
+      for (let k = 0; k <= n; k++) {
+        const t = (k / n - 0.5) * (af.length + 180);
+        stamp(af.x + ca * t, af.z + sa * t, af.width * 0.5 + 60, 1, 0.5);
+      }
+      if (af.apron) {
+        const a = af.apron;
+        const px = af.x + a.dx * ca - a.dz * sa, pz = af.z + a.dx * sa + a.dz * ca;
+        stamp(px, pz, Math.max(a.w, a.d) * 0.7 + 40, 1, 0.5);
       }
     }
     for (let k = 3; k < this.mapData.length; k += 4) this.mapData[k] = 255;

@@ -177,7 +177,7 @@ export class Heightfield {
    * Levels a strip and blends it into the eroded ground around it. The elevation is
    * whatever the terrain is at the middle of it, so a runway never ends up on a plinth.
    */
-  private carveAirfield(af: typeof AF[number]) {
+  carveAirfield(af: typeof AF[number]) {
     const half = WORLD_SIZE / 2;
     const n = this.noise;
     af.y = Math.round(this.getHeight(af.x, af.z) * 10) / 10;
@@ -263,6 +263,13 @@ export class Heightfield {
       }
     }
   }
+
+  /**
+   * Re-levels every strip. Called last, after the settlement has cut its streets: a road
+   * routed to the airfield was carved straight across the runway and left a ten-metre
+   * trench in it, which the aeroplane found before the pilot did.
+   */
+  carveAirfields() { for (const af of AF) this.carveAirfield(af); }
 
   /** Pushes the carved field back to the GPU; call once when all carving is done. */
   commit() {

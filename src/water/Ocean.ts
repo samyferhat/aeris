@@ -143,17 +143,25 @@ export class Ocean extends THREE.Group {
           wN = normalize(mix(vec3(0.0, 1.0, 0.0), wN, mix(0.55, 1.0, detailFade)));
 
           // ---- the bottom, seen through the surface -------------------------
-          vec3 Rr = refract(-V, wN, 0.7463);              // air into water, n = 1.34
-          float rdy = max(-Rr.y, 0.10);
-          vec2 hit = P.xz + Rr.xz * (depth / rdy);
-          hit = P.xz + Rr.xz * (max(0.0, -terrainHeightAt(hit)) / rdy);
-          float under = max(0.0, -terrainHeightAt(hit));
-          float pathDown = under / rdy;
-          float e = 26.0;
-          float sx = terrainHeightAt(hit + vec2(e, 0.0)) - terrainHeightAt(hit - vec2(e, 0.0));
-          float sz = terrainHeightAt(hit + vec2(0.0, e)) - terrainHeightAt(hit - vec2(0.0, e));
-          float bedSlope = 1.0 - 2.0 * e / sqrt(sx * sx + sz * sz + 4.0 * e * e);
-          vec3 bed = seaFloorAlbedo(hit, under, bedSlope) * caustics(hit, under);
+          // Below this there is nothing of the bottom left to see, so none of the work
+          // of finding it is worth doing: at thirty metres the extinction has already
+          // taken everything back. Most of the screen, most of the time.
+          vec2 hit = P.xz;
+          float under = depth, pathDown = depth, bedSlope = 0.0;
+          vec3 bed = vec3(0.0);
+          if (depth < 34.0) {
+            vec3 Rr = refract(-V, wN, 0.7463);            // air into water, n = 1.34
+            float rdy = max(-Rr.y, 0.10);
+            hit = P.xz + Rr.xz * (depth / rdy);
+            hit = P.xz + Rr.xz * (max(0.0, -terrainHeightAt(hit)) / rdy);
+            under = max(0.0, -terrainHeightAt(hit));
+            pathDown = under / rdy;
+            float e = 26.0;
+            float sx = terrainHeightAt(hit + vec2(e, 0.0)) - terrainHeightAt(hit - vec2(e, 0.0));
+            float sz = terrainHeightAt(hit + vec2(0.0, e)) - terrainHeightAt(hit - vec2(0.0, e));
+            bedSlope = 1.0 - 2.0 * e / sqrt(sx * sx + sz * sz + 4.0 * e * e);
+            bed = seaFloorAlbedo(hit, under, bedSlope) * caustics(hit, under);
+          }
           // Down to the bottom with the sun, back up to the eye along the refracted ray.
           float sunPath = min(under / max(uSunDir.y, 0.22), 110.0);
           vec3 Tw = exp(-SIGMA * (pathDown + sunPath));

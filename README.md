@@ -431,9 +431,13 @@ parois, et le pont suspendu au fond.*
 - Les vortex de bout d'aile sont rendus en sprites ; ils se lisent comme un filet de
   vapeur, pas encore comme le cordon torsadé du phénomène réel. Un ruban géométrique
   suivant la trajectoire du saumon serait la bonne primitive.
-- Les cadences en images par seconde n'ont jamais été mesurées dans un onglet visible,
-  seulement par requêtes de temps GPU : les chiffres relatifs entre passes sont fiables,
-  la valeur absolue ne l'est pas.
+- Les cadences en images par seconde n'ont toujours pas été mesurées dans un onglet
+  visible. Le monde a été instrumenté à 1600 × 900 (autour de 8 ms par image au-dessus
+  de la ville) et à 1920 × 1080, mais les mesures en onglet masqué dérivent d'un facteur
+  deux entre deux séries : elles ne valent rien en absolu. Le brief demandait 60 images
+  par seconde en survol du centre-ville et je ne peux pas certifier ce chiffre ici. La
+  mise à l'échelle adaptative de la résolution interne est là pour ça, et le budget
+  géométrique est petit — le coût est dans les pixels, pas dans les triangles.
 - Les véhicules et les bâtiments sont construits pour la silhouette, à la distance d'une
   passe de mitraillage ou d'un survol à trois cents pieds. De près, ils ne tiennent pas
   la comparaison avec la cellule.

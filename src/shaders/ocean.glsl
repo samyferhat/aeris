@@ -215,6 +215,9 @@ float wakeFoam(vec2 P) {
     if (i >= uWakeCount) break;
     vec4 A = uWakeA[i], B = uWakeB[i];
     vec2 d = P - A.xy;
+    // Cheap circular reject before the projections: at any moment most of the sea is
+    // nowhere near most of the boats.
+    if (dot(d, d) > (B.y + B.x) * (B.y + B.x)) continue;
     float t = -dot(d, A.zw);                       // metres astern
     if (t < -B.x * 1.5 || t > B.y) continue;
     float w = abs(dot(d, vec2(-A.w, A.z)));        // metres off the track
