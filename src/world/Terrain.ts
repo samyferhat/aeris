@@ -4,115 +4,219 @@ import { applyAerialPerspective } from '../sky/AerialPerspective';
 import terrainChunk from '../shaders/terrain.glsl?raw';
 import { SimplexNoise } from '../core/Noise';
 
-const CHUNKS = 24;                       // chunks per side
-const CHUNK = WORLD_SIZE / CHUNKS;       // 375 m
-// Coarse far LODs visibly truncate ridge lines — a 600 m peak sampled every 47 m turns
-// into a mesa — so the distant tiers stay comparatively dense. Geometry is cheap next
-// to this project's fragment work.
-// Every level is a multiple of EDGE_BASE so that the vertices shared with a neighbour
-// can be snapped to the same coarse anchors — that removes LOD cracks exactly, with no
-// skirts. Skirts are a vertical curtain at the chunk border and on sloping ground they
-// are always in front of the neighbour's surface, which reads as vertical banding.
-const EDGE_BASE = 12;
-const LOD_SEGMENTS = [60, 48, 36, 24, 12];
-const LOD_DISTANCE = [750, 1700, 3400, 6000];
-
 /**
- * Chunked, LOD'd terrain built from the heightfield. Each chunk lazily builds a
- * geometry per LOD; skirts hide LOD seams. One shared MeshStandardMaterial does
- * the PBR blending (see shaders/terrain.glsl) so CSM shadows and IBL just work.
+ * Terrain as a quadtree.
+ *
+ * A twenty-six kilometre map cannot be tiled uniformly: a grid fine enough for the
+ * cliffs at the strait is tens of thousands of tiles, and a grid coarse enough to draw
+ * turns every distant ridge into a mesa. So the map is subdivided towards the camera
+ * instead — a node splits while it is closer than a few times its own width — which
+ * spends vertices where they are looked at and holds the whole world in around a
+ * hundred and fifty draw calls.
+ *
+ * Two neighbours can then differ by one level, which would leave a crack along their
+ * shared edge. Rather than hide it under a skirt (a vertical curtain, always in front
+ * of the neighbour's surface on sloping ground, and it reads as banding), the finer
+ * node collapses every other vertex on that edge onto the line its coarse neighbour
+ * draws. The two surfaces are then the same surface, exactly.
  */
+
+const SEG = 64;                 // quads per node side
+const MAX_LEVEL = 6;            // 26000 / 2^6 = 406 m nodes, 6.3 m between vertices
+const LOD_K = 3.0;              // split while distance < LOD_K * node size
+const MAX_CACHED = 420;         // geometries kept alive; each is about 135 kB
+
+interface Node {
+  x0: number; z0: number; size: number; level: number;
+  /** Extremes of the terrain inside, for culling and for skipping the sea floor. */
+  minH: number; maxH: number;
+  children: Node[] | null;
+  mesh: THREE.Mesh | null;
+  /** Cached geometry per stitching mask. */
+  geos: Map<number, THREE.BufferGeometry>;
+  lastUsed: number;
+}
+
 export class Terrain extends THREE.Group {
   readonly material: THREE.MeshStandardMaterial;
-  private chunks: { mesh: THREE.Mesh; cx: number; cz: number; lod: number; geos: (THREE.BufferGeometry | null)[]; center: THREE.Vector3 }[] = [];
+  private root: Node;
+  private frame = 0;
+  private live: THREE.Mesh[] = [];
+  private cached: Node[] = [];
+  private box = new THREE.Box3();
 
   constructor(readonly hf: Heightfield, loader: THREE.TextureLoader) {
     super();
     this.material = this.makeMaterial(loader);
-    const half = WORLD_SIZE / 2;
-    for (let j = 0; j < CHUNKS; j++) for (let i = 0; i < CHUNKS; i++) {
-      const x0 = -half + i * CHUNK, z0 = -half + j * CHUNK;
-      // Skip chunks entirely under water (the ocean is opaque).
-      let maxH = -1e9;
-      for (let zz = 0; zz <= 8; zz++) for (let xx = 0; xx <= 8; xx++)
-        maxH = Math.max(maxH, hf.getHeight(x0 + xx * CHUNK / 8, z0 + zz * CHUNK / 8));
-      if (maxH < -2) continue;
-      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.frustumCulled = true;
-      const c = { mesh, cx: x0, cz: z0, lod: -1, geos: LOD_SEGMENTS.map(() => null) as (THREE.BufferGeometry | null)[], center: new THREE.Vector3(x0 + CHUNK / 2, 0, z0 + CHUNK / 2) };
-      this.chunks.push(c);
-      this.add(mesh);
+    this.root = this.makeNode(-WORLD_SIZE / 2, -WORLD_SIZE / 2, WORLD_SIZE, 0);
+    this.frustumCulled = false;
+  }
+
+  private makeNode(x0: number, z0: number, size: number, level: number): Node {
+    // Sample coarsely for the bounds. The margin of one extra ring matters: a node
+    // whose corners are all under water can still have a rock in the middle of it.
+    let minH = Infinity, maxH = -Infinity;
+    const N = 6;
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+      const h = this.hf.getHeight(x0 + i * size / N, z0 + j * size / N);
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+    }
+    return { x0, z0, size, level, minH, maxH, children: null, mesh: null, geos: new Map(), lastUsed: 0 };
+  }
+
+  /** Squared distance from a point to the node's footprint, on the ground plane. */
+  private distTo(n: Node, x: number, z: number): number {
+    const dx = Math.max(n.x0 - x, 0, x - (n.x0 + n.size));
+    const dz = Math.max(n.z0 - z, 0, z - (n.z0 + n.size));
+    return Math.hypot(dx, dz);
+  }
+
+  private shouldSplit(n: Node, cx: number, cz: number): boolean {
+    if (n.level >= MAX_LEVEL) return false;
+    return this.distTo(n, cx, cz) < n.size * LOD_K;
+  }
+
+  /** Level of the leaf covering a point — used to find out what a neighbour is doing. */
+  private levelAt(x: number, z: number, cx: number, cz: number): number {
+    let n = this.root;
+    while (this.shouldSplit(n, cx, cz)) {
+      if (!n.children) return n.level + 1;   // it would split, so treat it as split
+      const half = n.size / 2;
+      const i = x >= n.x0 + half ? 1 : 0, j = z >= n.z0 + half ? 1 : 0;
+      n = n.children[j * 2 + i];
+    }
+    return n.level;
+  }
+
+  private collect(n: Node, cx: number, cz: number, out: Node[]) {
+    if (n.maxH < -1.5) return;               // entirely sea floor: the ocean covers it
+    if (this.shouldSplit(n, cx, cz)) {
+      if (!n.children) {
+        const h = n.size / 2;
+        n.children = [
+          this.makeNode(n.x0, n.z0, h, n.level + 1),
+          this.makeNode(n.x0 + h, n.z0, h, n.level + 1),
+          this.makeNode(n.x0, n.z0 + h, h, n.level + 1),
+          this.makeNode(n.x0 + h, n.z0 + h, h, n.level + 1),
+        ];
+      }
+      for (const c of n.children) this.collect(c, cx, cz, out);
+    } else {
+      out.push(n);
     }
   }
 
-  private buildGeometry(x0: number, z0: number, seg: number): THREE.BufferGeometry {
+  /** Rebuilds the visible set. Cheap enough to run every frame. */
+  update(camera: THREE.Camera) {
+    const cx = camera.position.x, cz = camera.position.z;
+    this.frame++;
+    const leaves: Node[] = [];
+    this.collect(this.root, cx, cz, leaves);
+
+    let used = 0;
+    for (const n of leaves) {
+      // Which edges border a coarser neighbour. Probed one third of a node outside the
+      // edge, which lands inside the neighbour whatever its size.
+      const s = n.size, o = s * 0.34;
+      let mask = 0;
+      if (this.levelAt(n.x0 + s / 2, n.z0 - o, cx, cz) < n.level) mask |= 1;   // -Z
+      if (this.levelAt(n.x0 + s + o, n.z0 + s / 2, cx, cz) < n.level) mask |= 2;   // +X
+      if (this.levelAt(n.x0 + s / 2, n.z0 + s + o, cx, cz) < n.level) mask |= 4;   // +Z
+      if (this.levelAt(n.x0 - o, n.z0 + s / 2, cx, cz) < n.level) mask |= 8;   // -X
+
+      let geo = n.geos.get(mask);
+      if (!geo) {
+        geo = this.buildGeometry(n, mask);
+        n.geos.set(mask, geo);
+        if (n.geos.size === 1) this.cached.push(n);
+      }
+      let mesh = this.live[used];
+      if (!mesh) {
+        mesh = new THREE.Mesh(geo, this.material);
+        mesh.castShadow = true; mesh.receiveShadow = true;
+        this.add(mesh);
+        this.live[used] = mesh;
+      }
+      mesh.geometry = geo;
+      mesh.visible = true;
+      n.lastUsed = this.frame;
+      used++;
+    }
+    // Park the meshes we no longer need rather than removing them: the count is stable
+    // from frame to frame, so this settles immediately.
+    for (let i = used; i < this.live.length; i++) this.live[i].visible = false;
+    this.trim();
+  }
+
+  /** Drops the geometry of nodes that have not been drawn for a while. */
+  private trim() {
+    if (this.cached.length <= MAX_CACHED) return;
+    this.cached.sort((a, b) => a.lastUsed - b.lastUsed);
+    while (this.cached.length > MAX_CACHED * 0.8) {
+      const n = this.cached.shift()!;
+      if (n.lastUsed === this.frame) { this.cached.push(n); break; }
+      for (const g of n.geos.values()) g.dispose();
+      n.geos.clear();
+    }
+  }
+
+  private buildGeometry(n: Node, mask: number): THREE.BufferGeometry {
     const hf = this.hf;
-    const n = seg + 1;
-    const step = CHUNK / seg;
-    const stride = seg / EDGE_BASE;          // vertices per coarse anchor span
-    const pos = new Float32Array(n * n * 3);
-    const nor = new Float32Array(n * n * 3);
-    const uv = new Float32Array(n * n * 2);
+    const w = SEG + 1;
+    const step = n.size / SEG;
+    const pos = new Float32Array(w * w * 3);
+    const nor = new Float32Array(w * w * 3);
+    const uv = new Float32Array(w * w * 2);
     const tmp = new THREE.Vector3();
 
-    // Height of a border vertex, evaluated on the coarse anchor grid so that two
-    // neighbouring chunks agree along their shared edge whatever their LOD.
-    const anchored = (along: number, fixedX: number, fixedZ: number, horizontal: boolean) => {
-      const a0 = Math.floor(along / stride) * stride;
-      const a1 = Math.min(a0 + stride, seg);
-      const t = a1 === a0 ? 0 : (along - a0) / (a1 - a0);
-      const h0 = horizontal ? hf.getHeight(x0 + a0 * step, fixedZ) : hf.getHeight(fixedX, z0 + a0 * step);
-      const h1 = horizontal ? hf.getHeight(x0 + a1 * step, fixedZ) : hf.getHeight(fixedX, z0 + a1 * step);
-      return h0 + (h1 - h0) * t;
-    };
-
     let p = 0, q = 0;
-    for (let j = 0; j < n; j++) {
-      for (let i = 0; i < n; i++) {
-        const x = x0 + i * step, z = z0 + j * step;
-        let h: number;
-        if (j === 0 || j === seg) h = anchored(i, x, z, true);
-        else if (i === 0 || i === seg) h = anchored(j, x, z, false);
-        else h = hf.getHeight(x, z);
-        pos[p] = x; pos[p + 1] = h; pos[p + 2] = z;
+    for (let j = 0; j < w; j++) {
+      const z = n.z0 + j * step;
+      for (let i = 0; i < w; i++) {
+        const x = n.x0 + i * step;
+        pos[p] = x; pos[p + 1] = hf.getHeight(x, z); pos[p + 2] = z;
         hf.getNormal(x, z, tmp, step * 0.85);
         nor[p] = tmp.x; nor[p + 1] = tmp.y; nor[p + 2] = tmp.z;
         p += 3;
-        uv[q++] = i / seg; uv[q++] = j / seg;
+        uv[q++] = i / SEG; uv[q++] = j / SEG;
       }
     }
-    const idx: number[] = [];
-    for (let j = 0; j < seg; j++) for (let i = 0; i < seg; i++) {
-      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
-      idx.push(a, c, b, b, c, d);
+    // Stitching: on an edge shared with a coarser neighbour, the odd vertices are moved
+    // onto the segment its two even neighbours span, which is the line the neighbour
+    // actually draws there. Normals follow, or the seam shows up as a lighting crease.
+    const collapse = (a: number, b: number, c: number) => {
+      for (let k = 0; k < 3; k++) {
+        pos[b * 3 + k] = (pos[a * 3 + k] + pos[c * 3 + k]) * 0.5;
+        nor[b * 3 + k] = (nor[a * 3 + k] + nor[c * 3 + k]) * 0.5;
+      }
+      const l = Math.hypot(nor[b * 3], nor[b * 3 + 1], nor[b * 3 + 2]) || 1;
+      nor[b * 3] /= l; nor[b * 3 + 1] /= l; nor[b * 3 + 2] /= l;
+    };
+    for (let i = 1; i < SEG; i += 2) {
+      if (mask & 1) collapse(i - 1, i, i + 1);
+      if (mask & 4) { const r = SEG * w; collapse(r + i - 1, r + i, r + i + 1); }
+      if (mask & 8) collapse((i - 1) * w, i * w, (i + 1) * w);
+      if (mask & 2) collapse((i - 1) * w + SEG, i * w + SEG, (i + 1) * w + SEG);
+    }
+
+    const idx = new Uint16Array(SEG * SEG * 6);
+    let t = 0;
+    for (let j = 0; j < SEG; j++) for (let i = 0; i < SEG; i++) {
+      const a = j * w + i, b = a + 1, c = a + w, d = c + 1;
+      idx[t++] = a; idx[t++] = c; idx[t++] = b;
+      idx[t++] = b; idx[t++] = c; idx[t++] = d;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setIndex(idx);
-    g.computeBoundingSphere();
-    g.computeBoundingBox();
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    this.box.min.set(n.x0, n.minH - 6, n.z0);
+    this.box.max.set(n.x0 + n.size, n.maxH + 6, n.z0 + n.size);
+    g.boundingBox = this.box.clone();
+    g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());
     return g;
-  }
-
-  /** Pick LOD per chunk from camera distance. Cheap; call every frame. */
-  update(camera: THREE.Camera) {
-    const cp = camera.position;
-    for (const c of this.chunks) {
-      const dx = Math.max(Math.abs(cp.x - c.center.x) - CHUNK / 2, 0);
-      const dz = Math.max(Math.abs(cp.z - c.center.z) - CHUNK / 2, 0);
-      const d = Math.hypot(dx, dz);
-      let lod = LOD_SEGMENTS.length - 1;
-      for (let l = 0; l < LOD_DISTANCE.length; l++) if (d < LOD_DISTANCE[l]) { lod = l; break; }
-      if (lod !== c.lod) {
-        if (!c.geos[lod]) c.geos[lod] = this.buildGeometry(c.cx, c.cz, LOD_SEGMENTS[lod]);
-        c.mesh.geometry = c.geos[lod]!;
-        c.lod = lod;
-      }
-    }
   }
 
   private makeMaterial(loader: THREE.TextureLoader): THREE.MeshStandardMaterial {

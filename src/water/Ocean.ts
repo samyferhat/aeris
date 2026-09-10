@@ -4,7 +4,7 @@ import { applyAerialPerspective } from '../sky/AerialPerspective';
 import oceanChunk from '../shaders/ocean.glsl?raw';
 import { SimplexNoise } from '../core/Noise';
 
-const NEAR_SIZE = 5000, NEAR_SEGS = 360, FAR_SIZE = 120000;
+const NEAR_SIZE = 9000, NEAR_SEGS = 400, FAR_SIZE = 140000;
 
 export class Ocean extends THREE.Group {
   readonly material: THREE.MeshStandardMaterial;
@@ -31,7 +31,7 @@ export class Ocean extends THREE.Group {
     this.near = new THREE.Mesh(nearGeo, this.material);
     this.near.frustumCulled = false;
     this.near.receiveShadow = true;
-    const farGeo = new THREE.RingGeometry(NEAR_SIZE * 0.49, FAR_SIZE, 64, 8);
+    const farGeo = new THREE.RingGeometry(NEAR_SIZE * 0.49, FAR_SIZE, 128, 26);
     farGeo.rotateX(-Math.PI / 2);
     this.far = new THREE.Mesh(farGeo, this.material);
     this.far.frustumCulled = false;

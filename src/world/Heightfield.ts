@@ -1,34 +1,40 @@
 import * as THREE from 'three';
 import { SimplexNoise, smoothstep, clamp, lerp } from '../core/Noise';
 import { hydraulicErosion, smooth } from './Erosion';
+import {
+  WORLD_SIZE, HF_RES, EROSION_RES, AIRFIELDS, AIRFIELDS as AF, CHANNEL, ISLANDS,
+  elevationAt, coastAt, warp, cutWarp, newSample, Sample, Pt,
+} from './Archipelago';
+
+export { WORLD_SIZE, HF_RES, AIRFIELDS };
+/** The main strip, kept under its old name because everything starts from it. */
+export const RUNWAY = AF[0];
 
 /**
- * Procedural archipelago heightfield.
+ * The heightfield: the archipelago of Archipelago.ts, sampled, eroded and carved.
  *
- * Built in two stages: a landform pass (island masks + broad ridged massifs + hills),
- * then a hydraulic-erosion pass that carves the drainage network. The erosion is what
- * makes it read as a real place rather than as noise — see Erosion.ts.
+ * It is the single source of truth for terrain geometry, ground contacts in the flight
+ * model, water depth in the ocean shader, and where anything at all is allowed to be
+ * placed — a house, a tree, a road, a boat.
  *
- * It is the single source of truth for: terrain geometry, ground contacts in the flight
- * model, water depth in the ocean shader, and vegetation placement.
+ * Erosion runs on a half-resolution copy and is added back as a delta. Droplet erosion
+ * costs the same per cell whatever the cell measures, and what it produces — drainage
+ * networks, valley floors, sediment fans — has a scale of hundreds of metres, so it is
+ * fully resolved at 25 m. The fine field keeps its own detail and gains the valleys.
  *
  * World: Y up, sea level y = 0, extent WORLD_SIZE metres centred on the origin.
  */
-export const WORLD_SIZE = 9000;
-export const HF_RES = 1024;
-export const RUNWAY = {
-  // Runway 09/27, aligned with +X, centred here. Metres.
-  x: 0, z: 0, y: 14, length: 1100, width: 30,
-};
-
 export class Heightfield {
   readonly data = new Float32Array(HF_RES * HF_RES);
   readonly texture: THREE.DataTexture;
   readonly cell = WORLD_SIZE / (HF_RES - 1);
-  readonly noise = new SimplexNoise(20260909);
+  readonly noise = new SimplexNoise(20260910);
   maxHeight = 0;
-  /** 0..1 per cell: how much erosion was allowed to touch it (also used for scree shading). */
-  private erodeMask = new Float32Array(HF_RES * HF_RES);
+  /** 0..1 per erosion cell: how much erosion may touch it. */
+  private erodeMask = new Float32Array(EROSION_RES * EROSION_RES);
+  private _p: Pt = [0, 0];
+  private _c: Pt = [0, 0];
+  private _s: Sample = newSample();
 
   constructor() {
     this.texture = new THREE.DataTexture(this.data, HF_RES, HF_RES, THREE.RedFormat, THREE.FloatType);
@@ -40,99 +46,176 @@ export class Heightfield {
   /** Generates the field. Yields between stages so a loading screen can repaint. */
   async generate(onProgress?: (p: number, label: string) => void) {
     const yield_ = () => new Promise((r) => setTimeout(r, 0));
-    onProgress?.(0, 'Modelage du relief');
-    this.landform();
-    await yield_();
-    onProgress?.(0.35, 'Érosion hydraulique');
-    // Chunked so the browser can paint between batches.
-    const BATCHES = 6, PER = 26000;
-    for (let b = 0; b < BATCHES; b++) {
-      hydraulicErosion(this.data, HF_RES, this.cell, (i, j) => this.erodeMask[j * HF_RES + i], { droplets: PER }, 1337 + b * 7919);
-      onProgress?.(0.35 + 0.5 * ((b + 1) / BATCHES), 'Érosion hydraulique');
+    const half = WORLD_SIZE / 2;
+
+    // ---- landform, in bands so the bar moves ------------------------------
+    const BANDS = 8;
+    for (let b = 0; b < BANDS; b++) {
+      const j0 = Math.floor(b * HF_RES / BANDS), j1 = Math.floor((b + 1) * HF_RES / BANDS);
+      for (let j = j0; j < j1; j++) {
+        const z = -half + j * this.cell;
+        for (let i = 0; i < HF_RES; i++) {
+          const x = -half + i * this.cell;
+          this.data[j * HF_RES + i] = elevationAt(x, z, this.noise, this._p, this._c, this._s);
+        }
+      }
+      onProgress?.(0.04 + 0.30 * ((b + 1) / BANDS), 'Modelage des îles');
       await yield_();
     }
-    smooth(this.data, HF_RES, 0.55, (i, j) => this.erodeMask[j * HF_RES + i]);
-    smooth(this.data, HF_RES, 0.35, (i, j) => this.erodeMask[j * HF_RES + i]);
-    onProgress?.(0.92, 'Finition du terrain');
-    this.carveRunway();
+
+    // ---- erosion on the coarse copy ---------------------------------------
+    const coarse = this.downsample();
+    const base = coarse.slice();
+    this.buildErodeMask();
+    const mask = (i: number, j: number) => this.erodeMask[j * EROSION_RES + i];
+    const coarseCell = WORLD_SIZE / (EROSION_RES - 1);
+    const BATCHES = 6;
+    for (let b = 0; b < BATCHES; b++) {
+      hydraulicErosion(coarse, EROSION_RES, coarseCell, mask,
+        { droplets: 34000, radius: 3, maxLifetime: 62 }, 1337 + b * 7919);
+      onProgress?.(0.36 + 0.46 * ((b + 1) / BATCHES), 'Érosion hydraulique');
+      await yield_();
+    }
+    smooth(coarse, EROSION_RES, 0.55, mask);
+    smooth(coarse, EROSION_RES, 0.35, mask);
+
+    // What erosion changed, put back on the fine field. The delta is smooth by
+    // construction — it is the difference of two versions of the same landform — so
+    // bilinear upsampling loses nothing, and the fine detail survives untouched.
+    onProgress?.(0.84, 'Vallées et ravines');
+    this.applyDelta(coarse, base);
+    await yield_();
+
+    // ---- carving ----------------------------------------------------------
+    onProgress?.(0.90, 'Aérodromes');
+    for (const af of AF) this.carveAirfield(af);
     for (let i = 0; i < this.data.length; i++) if (this.data[i] > this.maxHeight) this.maxHeight = this.data[i];
     this.texture.needsUpdate = true;
     await yield_();
   }
 
-  /** Soft island silhouettes, warped so no coastline is a circle. Returns 0..1. */
-  private islandMask(x: number, z: number): number {
-    const n = this.noise;
-    const wx = x + 620 * n.fbm2D(x * 0.00033 + 3.1, z * 0.00033, 3);
-    const wz = z + 620 * n.fbm2D(x * 0.00033, z * 0.00033 + 7.7, 3);
-    const blob = (cx: number, cz: number, rx: number, rz: number) => {
-      const dx = (wx - cx) / rx, dz = (wz - cz) / rz;
-      return 1 - smoothstep(0.5, 1.0, Math.hypot(dx, dz));
-    };
-    return Math.max(
-      blob(-300, -700, 2400, 2050),    // main island: runway on its southern plain
-      blob(1250, -2000, 1350, 1050),   // mountainous north-east peninsula
-      blob(2900, 1700, 1000, 850),     // south-east island
-      blob(-2950, 1900, 780, 660),     // south-west island
-      blob(-3200, -2600, 520, 430),    // islet
-    );
+  // -------------------------------------------------------------------------
+
+  private downsample(): Float32Array {
+    const out = new Float32Array(EROSION_RES * EROSION_RES);
+    const step = (HF_RES - 1) / (EROSION_RES - 1);
+    for (let j = 0; j < EROSION_RES; j++) {
+      const fj = j * step;
+      for (let i = 0; i < EROSION_RES; i++) {
+        out[j * EROSION_RES + i] = this.bilinear(this.data, HF_RES, i * step, fj);
+      }
+    }
+    return out;
   }
 
-  private landform() {
-    const n = this.noise;
+  private bilinear(src: Float32Array, res: number, fx: number, fz: number): number {
+    const i = Math.min(res - 2, Math.max(0, fx | 0)), j = Math.min(res - 2, Math.max(0, fz | 0));
+    const tx = clamp(fx - i, 0, 1), tz = clamp(fz - j, 0, 1);
+    const a = src[j * res + i], b = src[j * res + i + 1];
+    const c = src[(j + 1) * res + i], d = src[(j + 1) * res + i + 1];
+    return lerp(lerp(a, b, tx), lerp(c, d, tx), tz);
+  }
+
+  /**
+   * Where water is allowed to carve. Land only, and not on anything that has been put
+   * there deliberately: the strips have to stay level, and the walls of the strait have
+   * to stay walls — a droplet run down an eighty-degree face will happily reduce it to
+   * a scree slope, which is exactly what the strait must not become.
+   */
+  private buildErodeMask() {
     const half = WORLD_SIZE / 2;
-    for (let j = 0; j < HF_RES; j++) {
-      const z = -half + j * this.cell;
-      for (let i = 0; i < HF_RES; i++) {
-        const x = -half + i * this.cell;
-        const mask = this.islandMask(x, z);
-        // Where the high ground is: a slow field, so massifs have a scale of kilometres.
-        const massif = smoothstep(0.12, 0.72, n.fbm2D(x * 0.00021 + 41, z * 0.00021 - 17, 3) * 0.5 + 0.5);
-        // Broad ridge lines. Not squared: squaring turns ridges into needles.
-        const ridge = n.ridged2D(x * 0.00040 + 11, z * 0.00040 + 5, 5, 2.05, 0.48);
-        const mountains = 780 * massif * Math.pow(ridge, 1.35);
-        const hills = 58 * (n.fbm2D(x * 0.0011, z * 0.0011, 4) * 0.5 + 0.5);
-        const detail = 7 * n.fbm2D(x * 0.0052, z * 0.0052, 3);
-        let h = 9 + hills + mountains + detail;
-        // Coastal shelf then deep water outside the island masks.
-        const shelf = -7 - 46 * (1 - mask) - 9 * (hills / 58);
-        h = lerp(shelf, h, smoothstep(0.0, 0.34, mask));
-        const k = j * HF_RES + i;
-        this.data[k] = h;
-        // Erode land above the waterline; leave the sea floor and the airfield alone.
-        const dx = Math.abs(x - RUNWAY.x), dz = Math.abs(z - RUNWAY.z);
-        const nearField = 1 - smoothstep(0, 260, Math.max(dx - (RUNWAY.length / 2 + 90), dz - (RUNWAY.width / 2 + 120), 0));
-        this.erodeMask[k] = smoothstep(-1, 14, h) * (1 - nearField);
+    const cell = WORLD_SIZE / (EROSION_RES - 1);
+    const step = (HF_RES - 1) / (EROSION_RES - 1);
+    for (let j = 0; j < EROSION_RES; j++) {
+      const z = -half + j * cell;
+      for (let i = 0; i < EROSION_RES; i++) {
+        const x = -half + i * cell;
+        const h = this.bilinear(this.data, HF_RES, i * step, j * step);
+        let m = smoothstep(-2, 26, h);
+        for (const af of AF) {
+          const [dx, dz] = this.airfieldLocal(af, x, z);
+          const out = Math.max(Math.abs(dx) - af.length / 2 - 120, Math.abs(dz) - af.width / 2 - 190, 0);
+          m *= smoothstep(0, 320, out);
+        }
+        // Distance to the strait axis, in world coordinates: the cut is authored there.
+        m *= smoothstep(CHANNEL.r, CHANNEL.r + 420, this.channelDistance(x, z));
+        this.erodeMask[j * EROSION_RES + i] = m;
       }
     }
   }
 
-  /** Flattens the runway plateau and blends it into the eroded terrain around it. */
-  private carveRunway() {
+  /** Distance from a point to the strait's axis capsule, positive outside it. */
+  private channelDistance(x: number, z: number): number {
+    const ax = CHANNEL.a[0], az = CHANNEL.a[1];
+    const b = CHANNEL.b ?? CHANNEL.a;
+    const vx = b[0] - ax, vz = b[1] - az;
+    const t = clamp(((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz), 0, 1);
+    return Math.hypot(x - ax - vx * t, z - az - vz * t) - CHANNEL.r;
+  }
+
+  private applyDelta(eroded: Float32Array, base: Float32Array) {
+    const delta = new Float32Array(eroded.length);
+    for (let k = 0; k < delta.length; k++) delta[k] = eroded[k] - base[k];
+    const step = (EROSION_RES - 1) / (HF_RES - 1);
+    for (let j = 0; j < HF_RES; j++) {
+      const fj = j * step;
+      for (let i = 0; i < HF_RES; i++) {
+        this.data[j * HF_RES + i] += this.bilinear(delta, EROSION_RES, i * step, fj);
+      }
+    }
+  }
+
+  /** Along-strip and across-strip offsets of a point, in the airfield's own frame. */
+  private airfieldLocal(af: typeof AF[number], x: number, z: number): [number, number] {
+    const a = (af.heading - 90) * Math.PI / 180;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const px = x - af.x, pz = z - af.z;
+    return [px * ca + pz * sa, -px * sa + pz * ca];
+  }
+
+  /**
+   * Levels a strip and blends it into the eroded ground around it. The elevation is
+   * whatever the terrain is at the middle of it, so a runway never ends up on a plinth.
+   */
+  private carveAirfield(af: typeof AF[number]) {
     const half = WORLD_SIZE / 2;
     const n = this.noise;
-    for (let j = 0; j < HF_RES; j++) {
+    af.y = Math.round(this.getHeight(af.x, af.z) * 10) / 10;
+    const apron = af.apron;
+    const reachX = af.length / 2 + 120 + (apron ? Math.abs(apron.dx) + apron.w / 2 : 0);
+    const reachZ = af.width / 2 + 160 + (apron ? Math.abs(apron.dz) + apron.d / 2 : 0);
+    const i0 = Math.max(0, Math.floor((af.x - half * 0 - reachX - 400 + half) / this.cell));
+    const i1 = Math.min(HF_RES - 1, Math.ceil((af.x + reachX + 400 + half) / this.cell));
+    const j0 = Math.max(0, Math.floor((af.z - reachZ - 400 + half) / this.cell));
+    const j1 = Math.min(HF_RES - 1, Math.ceil((af.z + reachZ + 400 + half) / this.cell));
+    for (let j = j0; j <= j1; j++) {
       const z = -half + j * this.cell;
-      for (let i = 0; i < HF_RES; i++) {
+      for (let i = i0; i <= i1; i++) {
         const x = -half + i * this.cell;
-        const dx = Math.abs(x - RUNWAY.x), dz = Math.abs(z - RUNWAY.z);
-        const out = Math.max(dx - (RUNWAY.length / 2 + 95), dz - (RUNWAY.width / 2 + 125), 0);
-        const flat = 1 - smoothstep(0, 210, out);
+        const [dx, dz] = this.airfieldLocal(af, x, z);
+        let out = Math.max(Math.abs(dx) - (af.length / 2 + 90), Math.abs(dz) - (af.width / 2 + 110), 0);
+        if (apron) {
+          out = Math.min(out, Math.max(Math.abs(dx - apron.dx) - apron.w / 2 - 25,
+                                       Math.abs(dz - apron.dz) - apron.d / 2 - 25, 0));
+        }
+        const flat = 1 - smoothstep(0, 300, out);
         if (flat <= 0.001) continue;
         const k = j * HF_RES + i;
-        // Perfectly level over the strip itself, gently undulating grass around it.
-        const strip = 1 - smoothstep(RUNWAY.width / 2 + 6, RUNWAY.width / 2 + 60, dz);
-        const target = RUNWAY.y + (1 - strip) * 1.6 * n.fbm2D(x * 0.004, z * 0.004, 2);
+        // Dead level over the strip itself, gently undulating grass around it.
+        const strip = 1 - smoothstep(af.width / 2 + 6, af.width / 2 + 55, Math.abs(dz));
+        const target = af.y + (1 - strip) * 1.5 * n.fbm2D(x * 0.004, z * 0.004, 2);
         this.data[k] = lerp(this.data[k], target, flat);
       }
     }
   }
 
+  // ---- queries ------------------------------------------------------------
+
   /** Bilinear height at world (x, z). Outside the map: deep sea floor. */
   getHeight(x: number, z: number): number {
     const half = WORLD_SIZE / 2;
     const fx = (x + half) / this.cell, fz = (z + half) / this.cell;
-    if (fx < 0 || fz < 0 || fx >= HF_RES - 1 || fz >= HF_RES - 1) return -60;
+    if (fx < 0 || fz < 0 || fx >= HF_RES - 1 || fz >= HF_RES - 1) return -180;
     const i = fx | 0, j = fz | 0, tx = fx - i, tz = fz - j;
     const d = this.data, r = HF_RES;
     const h00 = d[j * r + i], h10 = d[j * r + i + 1], h01 = d[(j + 1) * r + i], h11 = d[(j + 1) * r + i + 1];
@@ -143,8 +226,26 @@ export class Heightfield {
   getGround(x: number, z: number): number { return Math.max(0, this.getHeight(x, z)); }
 
   /**
+   * Signed distance to the nearest coastline, negative inland. Recomputed rather than
+   * stored: it costs a few hundred nanoseconds and it is only ever asked for when
+   * something is being placed.
+   */
+  coastDistance(x: number, z: number): number {
+    warp(x, z, this.noise, this._p);
+    cutWarp(x, z, this.noise, this._c);
+    coastAt(this._p[0], this._p[1], this._c[0], this._c[1], this._s);
+    return this._s.sdf;
+  }
+
+  /** Which island a point belongs to, or is nearest to. */
+  islandAt(x: number, z: number) {
+    this.coastDistance(x, z);
+    return ISLANDS[this._s.island];
+  }
+
+  /**
    * Surface normal. `spacing` should match the sampling of the mesh being built: a
-   * coarse tile that samples every 30 m but takes its normals from the 8.8 m grid picks
+   * coarse tile that samples every 30 m but takes its normals from the 12 m grid picks
    * up every erosion rill, and at a distance those alias into shimmering flutes.
    */
   getNormal(x: number, z: number, out = new THREE.Vector3(), spacing = this.cell): THREE.Vector3 {
