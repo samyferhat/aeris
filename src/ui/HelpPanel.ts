@@ -191,7 +191,9 @@ export class HelpPanel {
     this.build();
 
     this.hint = document.createElement('div');
-    this.hint.className = 'help-hint';
+    // Starts hidden: the reminder belongs to the flight, not to the menus in front of
+    // it, and startHint is what lets it out.
+    this.hint.className = 'help-hint gone';
     this.hint.textContent = 'H pour l’aide';
     document.body.appendChild(this.hint);
 
