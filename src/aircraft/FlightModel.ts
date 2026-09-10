@@ -147,6 +147,8 @@ export class FlightModel {
   }
 
   get isCrashed() { return this.crashed; }
+  /** Shot down, rather than flown into the ground. */
+  destroy() { this.crashed = true; }
 
   step(dt: number, ctrl: Controls) {
     const cfg = this.config;

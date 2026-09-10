@@ -45,6 +45,10 @@ interface Round {
   smokeTimer: number;
   /** Fin deflection, for the visible control surfaces. */
   finDefl: THREE.Vector2;
+  /** Width of the smoke trail, m. A pod-fired rocket is not as wide as its pod. */
+  trailScale: number;
+  /** Where the round was last frame, so the trail can be laid along the path. */
+  prev: THREE.Vector3;
   spin: number;
   /** Tracer flag for a gun round. */
   tracer: boolean;
@@ -55,6 +59,10 @@ interface Round {
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
 const _d = new THREE.Vector3(), _e = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+// Scratch used inside stepGuided only. Reusing _a there silently destroyed the
+// collision segment the caller had just stashed in it, and every round flew
+// through the world untouched.
+const _a2 = new THREE.Vector3(), _s1 = new THREE.Vector3(), _s2 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const FWD = new THREE.Vector3(0, 0, 1);
 
@@ -88,7 +96,7 @@ export class Ordnance extends THREE.Group {
       kind: 'bullet', alive: true, pos: new THREE.Vector3(), vel: new THREE.Vector3(),
       quat: new THREE.Quaternion(), age: 0, life: 1, spec: null, mesh: null, fins: null,
       drop: 0, burn: 0, target: null, smokeTimer: 0, finDefl: new THREE.Vector2(),
-      spin: 0, tracer: false, damage: 0, blast: 0,
+      trailScale: 1, prev: new THREE.Vector3(), spin: 0, tracer: false, damage: 0, blast: 0,
     };
   }
 
@@ -191,6 +199,8 @@ export class Ordnance extends THREE.Group {
     r.damage = spec.damage; r.blast = spec.blast;
     r.smokeTimer = 0;
     r.spin = spec.kind === 'bomb' ? 0.55 : 0;
+    r.trailScale = Math.max(0.6, spec.diameter * 3.0);
+    r.prev.copy(r.pos);
     r.kind = spec.kind === 'bomb' || spec.kind === 'dispenser' ? 'bomb'
       : spec.kind === 'aam' ? 'missile' : 'rocket';
     const mesh = StoreRack.spawnMesh(spec.model);
@@ -203,6 +213,36 @@ export class Ordnance extends THREE.Group {
     }
     this.rounds.push(r);
     this.onFire?.(r.kind === 'bomb' ? 'bomb' : r.kind === 'missile' ? 'missile' : 'rocket', r.pos);
+    return true;
+  }
+
+  /**
+   * A missile fired by something that has no pylons to speak of — an enemy fighter.
+   * Same round, same guidance, same smoke: the shot coming at the player has to be
+   * exactly as readable as the one leaving his own wing, or the warning means nothing.
+   */
+  launchFree(storeId: string, from: THREE.Vector3, quat: THREE.Quaternion,
+             carrierVel: THREE.Vector3, target: DamageTarget | null, night: number) {
+    const spec = STORES[storeId];
+    if (!spec) return false;
+    const r = this.take();
+    r.spec = spec;
+    r.kind = 'missile';
+    r.pos.copy(from);
+    r.quat.copy(quat);
+    r.vel.copy(carrierVel).addScaledVector(_b.set(0, -1, 0).applyQuaternion(quat), 3.0);
+    r.drop = spec.dropTime;
+    r.burn = spec.burnTime;
+    r.life = spec.life;
+    r.target = target;
+    r.damage = spec.damage; r.blast = spec.blast;
+    r.smokeTimer = 0; r.spin = 0;
+    r.trailScale = Math.max(0.6, spec.diameter * 3.0);
+    r.prev.copy(r.pos);
+    const mesh = StoreRack.spawnMesh(spec.model);
+    if (mesh) { mesh.position.copy(r.pos); mesh.quaternion.copy(r.quat); r.mesh = mesh; this.add(mesh); }
+    this.rounds.push(r);
+    this.onFire?.('missile', r.pos);
     return true;
   }
 
@@ -243,12 +283,17 @@ export class Ordnance extends THREE.Group {
         _c.addScaledVector(_b, 0.55).normalize();
         r.vel.copy(fm.velocity).addScaledVector(_c, 22);
         r.drop = 0; r.burn = s.spec.burnTime; r.life = s.spec.life;
+        // The thing in the air is an eighty-millimetre rocket, not the half-metre pod
+        // it came out of: taking the trail width from the pod gave a smoke column four
+        // times too wide, which is most of why a salvo read as a row of clouds.
+        r.trailScale = 1.7;
+        r.prev.copy(r.pos);
         r.damage = s.spec.damage; r.blast = s.spec.blast;
         r.target = null; r.smokeTimer = 0; r.spin = 0;
         const mesh = StoreRack.spawnMesh(S8_MODEL);
         if (mesh) { mesh.position.copy(r.pos); mesh.quaternion.copy(r.quat); r.mesh = mesh; this.add(mesh); }
         this.rounds.push(r);
-        this.fx.motorIgnite(r.pos, _c.clone().negate(), night);
+        this.fx.motorIgnite(r.pos, _c.clone().negate(), night, 0.42);
         this.onFire?.('rocket', r.pos);
       }
       if (s.left <= 0 || s.py.remaining <= 0) {
@@ -308,11 +353,18 @@ export class Ordnance extends THREE.Group {
       // The motor pushes along the body, not along the velocity: that difference is
       // what lets a missile point where it is going and still slide sideways.
       r.vel.addScaledVector(_b, (spec.thrust / Math.max(40, spec.mass)) * dt);
-      r.smokeTimer -= dt;
-      if (r.smokeTimer <= 0) {
-        r.smokeTimer = 0.012;
-        _c.copy(_b).multiplyScalar(-18).add(_d.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(3));
-        this.fx.motorTrail(r.pos, _c, spec.diameter * 3.2);
+      // Lay the trail along the path travelled, not once a frame: at three hundred
+      // metres a second one puff per frame is five metres apart and reads as a string
+      // of beads. Spacing it by distance keeps the column continuous at any speed.
+      const stepLen = _s1.copy(r.pos).sub(r.prev).length();
+      r.smokeTimer += stepLen;
+      let guard = 0;
+      while (r.smokeTimer >= 1.0 && guard++ < 14) {
+        r.smokeTimer -= 1.0;
+        _s1.copy(r.prev).lerp(r.pos, stepLen > 1e-4 ? 1 - r.smokeTimer / stepLen : 1);
+        _s2.copy(_b).multiplyScalar(-14).add(
+          _e.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(2.2));
+        this.fx.motorTrail(_s1, _s2, r.trailScale);
       }
     }
 
@@ -339,6 +391,7 @@ export class Ordnance extends THREE.Group {
       const rate = r.kind === 'bomb' ? 1.2 : 7.0;
       r.quat.slerp(_q1, 1 - Math.exp(-rate * dt));
     }
+    r.prev.copy(r.pos);
     if (r.mesh) {
       r.mesh.position.copy(r.pos);
       r.mesh.quaternion.copy(r.quat);

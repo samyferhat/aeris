@@ -40,7 +40,11 @@ void main() {
   // Fade in over the first instant, then out over the whole rest of the life, so a
   // trail thins with distance behind the missile instead of ending in a hard stub.
   vOpacity = smoothstep(0.0, 0.06, t) * (1.0 - t) * (1.0 - t);
-  gl_PointSize = clamp(r * 2.0 * uPixelScale / max(-mv.z, 1.0), 1.0, 900.0);
+  // A point primitive is clipped on its centre, so a sprite big enough to straddle the
+  // near plane is drawn as a hard-edged trapezoid — a white wedge stuck to the aircraft.
+  // Fading the last few metres costs one puff out of a thousand and removes it.
+  vOpacity *= smoothstep(4.0, 17.0, -mv.z);
+  gl_PointSize = clamp(r * 2.0 * uPixelScale / max(-mv.z, 1.0), 1.0, 620.0);
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -688,22 +692,27 @@ export class CombatFx extends THREE.Group {
    * its own flash, its own light, and a burst of smoke that is left behind at the
    * point of ignition rather than carried with the missile.
    */
-  motorIgnite(p: THREE.Vector3, back: THREE.Vector3, night: number) {
-    this.blasts.spawn(p, 0.20, 0.9, 3.4, C(1.0, 0.62, 0.24), BLAST_FLASH);
-    this.heat.spawn(p, 0.55, 1.2, 7.0, C(1, 1, 1), BLAST_HEAT);
+  motorIgnite(p: THREE.Vector3, back: THREE.Vector3, night: number, scale = 1) {
+    // `scale` exists for salvos: twenty rockets each throwing a full launch flash in
+    // half a second is a white screen, not a launch. The smoke is left at full strength
+    // because that is the part that should swamp the aircraft.
+    this.blasts.spawn(p, 0.18, 0.34 * scale, 1.3 * scale, C(1.0, 0.62, 0.24), BLAST_FLASH);
+    this.heat.spawn(p, 0.55, 1.0 * scale, 6.0 * scale, C(1, 1, 1), BLAST_HEAT);
     const li = this.lights.request(3);
-    this.lights.set(li, p, C(1.0, 0.60, 0.26), 2600 * (0.45 + 0.55 * night), 140, 0.30);
-    for (let i = 0; i < 16; i++) {
-      _v.copy(back).multiplyScalar(18 + Math.random() * 40)
-        .add(_v2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(16));
-      this.smoke.spawn(p, _v, 1.6 + Math.random() * 1.6, 0.5, 7.5, SMOKE_WHITE, 0.8, 1.1);
-      if (i < 8) this.sparks.spawn(p, _v.clone().multiplyScalar(1.6), 0.5, 0.4, SPARK_HOT, 1.0);
+    this.lights.set(li, p, C(1.0, 0.60, 0.26), 900 * scale * (0.4 + 0.6 * night), 110, 0.26);
+    for (let i = 0; i < 14; i++) {
+      _v.copy(back).multiplyScalar(14 + Math.random() * 34)
+        .add(_v2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(14));
+      this.smoke.spawn(p, _v, 2.4 + Math.random() * 2.6, 0.6, 8.5, SMOKE_WHITE, 0.9, 1.0);
+      if (i < 6) this.sparks.spawn(p, _v.clone().multiplyScalar(1.5), 0.5, 0.4, SPARK_HOT, 1.0);
     }
   }
 
   /** One puff of a rocket motor's exhaust trail. */
   motorTrail(p: THREE.Vector3, v: THREE.Vector3, scale: number) {
-    this.smoke.spawn(p, v, 2.6 + Math.random() * 2.2, 0.35 * scale, 6.5 * scale, SMOKE_WHITE, 0.35, 0.9);
+    // Born close to the rocket's own diameter and spreading to a few metres. A trail
+    // that starts wide is a cloud; a trail that grows is smoke.
+    this.smoke.spawn(p, v, 3.2 + Math.random() * 2.6, 0.55 * scale, 3.6 * scale, SMOKE_WHITE, 0.30, 1.05);
   }
 
   /** A damaged aircraft trailing smoke. */

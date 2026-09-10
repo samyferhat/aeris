@@ -25,6 +25,14 @@ export class Audio {
   private started = false;
   private master!: GainNode;
   private dry!: GainNode;
+  private duck!: GainNode;
+  private gunGain!: GainNode;
+  private gunLfoGain!: GainNode;
+  private seekerGain!: GainNode;
+  private seekerOsc!: OscillatorNode;
+  private seekerLfo!: OscillatorNode;
+  private seekerLfoGain!: GainNode;
+  private combatNoise!: AudioBuffer;
   private cockpitSend!: GainNode;
   private outsideSend!: GainNode;
   private engineGain!: GainNode;
@@ -86,7 +94,13 @@ export class Audio {
     this.cabinFilter.type = 'lowpass';
     this.cabinFilter.frequency.value = 20000;
     this.cabinFilter.Q.value = 0.7;
-    this.cabinFilter.connect(this.master);
+    // Everything passes through a duck gain so a close blast can briefly deafen the
+    // pilot, which is what a big explosion actually does and what a game normally fakes
+    // with a filter sweep. Here it is one node in the right place.
+    this.duck = ctx.createGain();
+    this.duck.gain.value = 1;
+    this.duck.connect(this.master);
+    this.cabinFilter.connect(this.duck);
 
     this.dry = ctx.createGain();
     this.dry.gain.value = 1;
@@ -186,6 +200,7 @@ export class Audio {
     this.rumbleSrc.start();
 
     this.buildTurbine(ctx, noise, toBus);
+    this.buildCombat(ctx, noise, toBus);
     this.master.gain.setTargetAtTime(0.85, ctx.currentTime, 1.2);
   }
 
@@ -247,6 +262,206 @@ export class Audio {
   }
 
   setProfile(profile: 'propeller' | 'turbofan') { this.profile = profile; }
+
+  /**
+   * Weapon and warning voices.
+   *
+   * The gun is the interesting one. Twenty-five rounds a second is far too fast for
+   * one-shot samples: it is a continuous tearing sound, so it is built as one, from a
+   * resonant band of noise gated at the firing rate with a sub underneath. Turning the
+   * trigger on and off is then a gain ramp, which also gets the spin-up and the
+   * trailing thud of the last round for free.
+   */
+  private buildCombat(ctx: AudioContext, noise: AudioBuffer, toBus: (n: AudioNode) => void) {
+    this.combatNoise = noise;
+    // --- gun -------------------------------------------------------------
+    const src = ctx.createBufferSource();
+    src.buffer = noise; src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 210; bp.Q.value = 1.4;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 1800;
+    this.gunGain = ctx.createGain();
+    this.gunGain.gain.value = 0;
+    // The gate: a square at the cyclic rate, which is what gives a cannon its rip.
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 25;
+    this.gunLfoGain = ctx.createGain();
+    this.gunLfoGain.gain.value = 0.55;
+    const bias = ctx.createConstantSource();
+    bias.offset.value = 0.45;
+    const gate = ctx.createGain();
+    gate.gain.value = 0;
+    lfo.connect(this.gunLfoGain); this.gunLfoGain.connect(gate.gain);
+    bias.connect(gate.gain);
+    src.connect(bp); bp.connect(lp); lp.connect(gate); gate.connect(this.gunGain);
+    // A sub sine under it, so the burst is felt as well as heard.
+    const sub = ctx.createOscillator();
+    sub.type = 'sine'; sub.frequency.value = 62;
+    const subG = ctx.createGain(); subG.gain.value = 0.30;
+    sub.connect(subG); subG.connect(gate);
+    toBus(this.gunGain);
+    src.start(); lfo.start(); bias.start(); sub.start();
+
+    // --- infrared seeker growl -------------------------------------------
+    // A square through a lowpass, chopped by a second oscillator whose rate climbs
+    // with the lock. Every pilot who has heard one knows what a good tone sounds like
+    // in half a second, which is exactly the point of putting it in.
+    this.seekerOsc = ctx.createOscillator();
+    this.seekerOsc.type = 'square';
+    this.seekerOsc.frequency.value = 300;
+    const sf = ctx.createBiquadFilter();
+    sf.type = 'lowpass'; sf.frequency.value = 1400;
+    this.seekerLfo = ctx.createOscillator();
+    this.seekerLfo.type = 'square';
+    this.seekerLfo.frequency.value = 8;
+    this.seekerLfoGain = ctx.createGain();
+    this.seekerLfoGain.gain.value = 0.5;
+    const sBias = ctx.createConstantSource();
+    sBias.offset.value = 0.5;
+    const sGate = ctx.createGain();
+    sGate.gain.value = 0;
+    this.seekerLfo.connect(this.seekerLfoGain); this.seekerLfoGain.connect(sGate.gain);
+    sBias.connect(sGate.gain);
+    this.seekerGain = ctx.createGain();
+    this.seekerGain.gain.value = 0;
+    this.seekerOsc.connect(sf); sf.connect(sGate); sGate.connect(this.seekerGain);
+    // Straight to the cabin filter: it is in the pilot's headset, not in the world.
+    this.seekerGain.connect(this.dry);
+    this.seekerOsc.start(); this.seekerLfo.start(); sBias.start();
+  }
+
+  /** Trigger held or released. */
+  setGunFiring(on: boolean) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.gunGain.gain.setTargetAtTime(on ? 0.34 : 0, t, on ? 0.008 : 0.05);
+  }
+
+  /** Seeker tone, 0..1. Rises in pitch and in chop rate as the head settles. */
+  setSeekerTone(level: number) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const l = Math.min(1, Math.max(0, level));
+    this.seekerGain.gain.setTargetAtTime(l > 0.02 ? 0.026 + 0.055 * l : 0, t, 0.08);
+    this.seekerOsc.frequency.setTargetAtTime(280 + 640 * l * l, t, 0.10);
+    this.seekerLfo.frequency.setTargetAtTime(6 + 26 * l, t, 0.10);
+  }
+
+  /**
+   * A motor lighting, heard from wherever the pilot is. The Doppler is applied by
+   * hand from the closing rate: it is the shift that makes a missile leaving the rail
+   * sound like it is going somewhere.
+   */
+  whoosh(distance: number, closing: number, power = 1) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + Math.min(1.5, distance / 343);
+    const src = ctx.createBufferSource();
+    src.buffer = this.combatNoise;
+    // 343 m/s: the shift is small but it is the difference between a hiss and a launch.
+    src.playbackRate.value = Math.max(0.55, Math.min(1.9, 1 + closing / 343));
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = 0.9;
+    bp.frequency.setValueAtTime(260, t);
+    bp.frequency.exponentialRampToValueAtTime(1500, t + 0.35);
+    bp.frequency.exponentialRampToValueAtTime(420, t + 1.3);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.42 * power, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+    src.connect(bp); bp.connect(g);
+    g.connect(this.dry); g.connect(this.cockpitSend); g.connect(this.outsideSend);
+    src.start(t); src.stop(t + 1.6);
+  }
+
+  /**
+   * An explosion at a distance. Sound travels at three hundred and forty-three metres
+   * a second and light does not, so the bang is scheduled late by exactly that much:
+   * a fuel tank going up two kilometres away flashes, and then, five seconds later,
+   * arrives. That gap is the single most convincing thing in the whole audio mix.
+   */
+  blast(distance: number, power: number) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx;
+    const delay = Math.min(9, distance / 343);
+    const t = ctx.currentTime + delay;
+    // Distance also eats the top end: far explosions are all bottom.
+    const near = Math.exp(-distance / 900);
+    const amp = Math.min(0.95, (0.22 + 0.5 * power) * (0.14 + 0.86 * near));
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(120 * (1 + 0.3 * power), t);
+    osc.frequency.exponentialRampToValueAtTime(26, t + 0.55 + 0.25 * power);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(amp, t + 0.015);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.9 + 0.4 * power);
+    osc.connect(og);
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.combatNoise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(4200 * near + 240, t);
+    lp.frequency.exponentialRampToValueAtTime(180, t + 0.7);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(amp * 0.8, t + 0.02);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 + 0.6 * power);
+    src.connect(lp); lp.connect(ng);
+
+    for (const n of [og, ng]) {
+      n.connect(this.dry); n.connect(this.cockpitSend); n.connect(this.outsideSend);
+    }
+    osc.start(t); osc.stop(t + 1.6 + 0.6 * power);
+    src.start(t); src.stop(t + 1.8 + 0.6 * power);
+
+    // Close and loud: everything else drops away for a moment and comes back.
+    if (distance < 260 && power > 1.2) {
+      const d = this.duck.gain;
+      d.cancelScheduledValues(t);
+      d.setValueAtTime(1, t);
+      d.linearRampToValueAtTime(0.24, t + 0.05);
+      d.setTargetAtTime(1, t + 0.25, 0.7);
+    }
+  }
+
+  /**
+   * The launch warning. A real Russian voice if the platform has one — the alert in a
+   * Soviet cockpit is a woman's voice, and a synthesised one in the right language is
+   * closer to the truth than any tone. Falls back to a two-note alert.
+   */
+  private lastVoice = 0;
+  voice(text: string) {
+    if (this.muted) return;
+    const now = performance.now();
+    if (now - this.lastVoice < 3000) return;
+    this.lastVoice = now;
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    if (synth) {
+      const ru = synth.getVoices().find((v) => v.lang.startsWith('ru'));
+      if (ru) {
+        const u = new SpeechSynthesisUtterance(text);
+        u.voice = ru; u.lang = ru.lang; u.rate = 1.05; u.pitch = 1.15; u.volume = 0.9;
+        try { synth.cancel(); synth.speak(u); return; } catch { /* fall through */ }
+      }
+    }
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator();
+      o.type = 'square'; o.frequency.value = 880;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + i * 0.18);
+      g.gain.exponentialRampToValueAtTime(0.10, t + i * 0.18 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.18 + 0.12);
+      o.connect(g); g.connect(this.dry);
+      o.start(t + i * 0.18); o.stop(t + i * 0.18 + 0.14);
+    }
+  }
 
   private noiseBuffer(ctx: AudioContext, seconds: number): AudioBuffer {
     const n = Math.floor(ctx.sampleRate * seconds);

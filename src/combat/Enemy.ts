@@ -61,6 +61,10 @@ export class Enemy implements DamageTarget {
   /** 0 = healthy, 1 = about to come apart. */
   private hurt = 0;
   private spiral = 0;
+  /** Seconds until it can shoot again. Long, on purpose: this is not a duel. */
+  private shotCooldown = 8 + Math.random() * 10;
+  /** Set by the world when this one has taken a shot, so the HUD can warn. */
+  onLaunch: ((from: THREE.Vector3) => void) | null = null;
 
   constructor(readonly node: THREE.Object3D, private hf: Heightfield, private fx: CombatFx) {}
 
@@ -116,6 +120,17 @@ export class Enemy implements DamageTarget {
     // --- decide -------------------------------------------------------------
     const toPlayer = _v.copy(player).sub(this.position);
     const range = toPlayer.length();
+
+    // --- shoot back ---------------------------------------------------------
+    // Only from a sensible position and rarely. The point of an enemy shot is the
+    // warning and the two seconds of deciding what to do about it, not attrition.
+    this.shotCooldown -= dt;
+    _v2.copy(FWD).applyQuaternion(this.quaternion);
+    const aspect = range > 1 ? toPlayer.clone().divideScalar(range).dot(_v2) : 0;
+    if (this.shotCooldown <= 0 && range > 1200 && range < 6500 && aspect > 0.86) {
+      this.shotCooldown = 16 + Math.random() * 14;
+      this.onLaunch?.(this.position);
+    }
     const agl = this.position.y - Math.max(0, this.hf.getHeight(this.position.x, this.position.z));
 
     if (threat && this.state !== 'break') { this.state = 'break'; this.stateTime = 0; }

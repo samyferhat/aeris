@@ -14,6 +14,7 @@ import { CESSNA, MIG29, AIRCRAFT, byId, AircraftConfig } from './aircraft/Aircra
 import { Aircraft } from './aircraft/Aircraft';
 import { CameraRig } from './aircraft/Cameras';
 import { HUD } from './ui/HUD';
+import { CombatHud } from './ui/CombatHud';
 import { TimeSlider } from './ui/TimeSlider';
 import { Pipeline } from './fx/Pipeline';
 import { Particles } from './fx/Particles';
@@ -21,6 +22,7 @@ import { Audio } from './audio/Audio';
 import { Afterburner } from './fx/Afterburner';
 import { JetEffects } from './fx/JetEffects';
 import { Selection } from './ui/Selection';
+import { LoadoutScreen } from './ui/LoadoutScreen';
 import { Loadout } from './combat/Armament';
 import { StoreRack } from './combat/StoreRack';
 import { CombatFx } from './combat/Effects';
@@ -28,6 +30,7 @@ import { Ordnance } from './combat/Ordnance';
 import { STORES } from './combat/Armament';
 import { TargetWorld } from './combat/Targets';
 import { EnemyFleet } from './combat/Enemy';
+import { Targeting } from './combat/Targeting';
 
 const _size = new THREE.Vector2();
 const _zero = new THREE.Vector3();
@@ -135,7 +138,8 @@ async function boot() {
 
     if (cfg.armed) {
       rack.bind(aircraft, aircraft.locators);
-      syncStores();
+      // Through onChange, not syncStores, so the selected weapon is picked as well.
+      loadout.onChange?.();
     } else {
       rack.clear();
       fm.storeMass = 0; fm.storeDrag = 0;
@@ -163,7 +167,10 @@ async function boot() {
   scene.add(ordnance);
   const targets = new TargetWorld(hf, combatFx);
   scene.add(targets);
-  targets.build(() => { /* site events are wired to the HUD below */ });
+  targets.build((_site, prop, at) => {
+    const d = at.distanceTo(fm.position);
+    audio.blast(d, prop.kind === 'fuel' ? 3.2 : prop.kind === 'structure' ? 2.2 : 1.6);
+  });
   // The forest has to make room for what has been built on it.
   vegetation.clearings.push(...targets.clearings);
   const enemies = new EnemyFleet(hf, combatFx);
@@ -179,17 +186,56 @@ async function boot() {
       targets.add(node);
     }
   }
+  /** The player, as something a missile can chase and hurt. */
+  const player = {
+    position: fm.position, velocity: fm.velocity, radius: 8.0, alive: true, name: 'Vous',
+    hp: 320,
+    get heat() { return 0.8 + 1.4 * fm.state.afterburner; },
+    damage(amount: number, at: THREE.Vector3) {
+      this.hp -= amount;
+      combatFx.impact(at, _zero.set(0, 1, 0), 1.2, 'metal');
+      rig.addShake(Math.min(1.0, amount * 0.012));
+      audio.thump(Math.min(1, amount * 0.008));
+      if (this.hp <= 0) { fm.destroy(); combatFx.explosion(fm.position, 2.2, 'air'); }
+    },
+  };
   for (let i = 0; i < 3; i++) {
-    enemies.spawn(new THREE.Vector3(600 + i * 700, 1500 + i * 260, 1400 - i * 500),
+    const e = enemies.spawn(new THREE.Vector3(600 + i * 700, 1500 + i * 260, 1400 - i * 500),
       Math.PI * 0.5 + i * 0.6, 240 + i * 12);
+    if (!e) continue;
+    e.onLaunch = (from) => {
+      // The shot uses the same R-73 the player carries, so the warning, the smoke and
+      // the manoeuvre needed to defeat it are all things already learnt from firing one.
+      ordnance.launchFree('R73', from, e.quaternion, e.velocity, player, atmosphere.night);
+      combatHud.launchWarning(from);
+      audio.voice('Пуск');
+    };
   }
   /** Everything the ordnance can hit, rebuilt when the roster changes. */
   const refreshTargets = () => {
     const list = targets.all.slice();
     enemies.collectTargets(list as never[]);
+    if (fm.config.armed) list.push(player as never);
     ordnance.targets = list;
   };
   refreshTargets();
+  const targeting = new Targeting(ordnance);
+
+  // ---- weapons audio -------------------------------------------------------
+  // Everything is heard from where the pilot is, with the travel time of sound put
+  // back in: the flash of a fuel tank two kilometres away arrives six seconds before
+  // the bang, and nothing else in the mix sells distance half as well.
+  ordnance.onImpact = (pos, power, kind) => {
+    const d = pos.distanceTo(fm.position);
+    audio.blast(d, kind === 'fuel' ? power * 1.4 : power);
+    if (d < 220) rig.addShake(Math.min(0.8, power * 0.45 * (1 - d / 220)));
+  };
+  ordnance.onFire = (what, pos) => {
+    if (what === 'missile' || what === 'rocket') {
+      const closing = fm.velocity.length();
+      audio.whoosh(pos.distanceTo(fm.position), closing, what === 'missile' ? 1 : 0.55);
+    }
+  };
   for (const m of TargetWorld.allMaterials()) engine.setupShadowMaterial(m);
   for (const m of targets.apronMaterials) engine.setupShadowMaterial(m);
   for (const m of EnemyFleet.allMaterials()) engine.setupShadowMaterial(m);
@@ -211,6 +257,7 @@ async function boot() {
   progress(0.92, 'Post-traitement');
   const post = new Pipeline(renderer, scene, camera);
   const hud = new HUD();
+  const combatHud = new CombatHud(document.getElementById('hud')!);
   const timeSlider = new TimeSlider(atmosphere.hour);
   const applyTime = (h: number) => {
     atmosphere.setHour(h);
@@ -234,17 +281,17 @@ async function boot() {
       case 'flapsDown': input.controls.flaps = Math.min(1, input.controls.flaps + 1 / 3); break;
       case 'timeUp': timeSlider.set(timeSlider.value + 0.5); break;
       case 'timeDown': timeSlider.set(timeSlider.value - 0.5); break;
-      case 'hud': hud.toggle(); break;
+      case 'hud': hud.toggle(); combatHud.toggle(); break;
       case 'mute': audio.toggleMute(); break;
       case 'gear': if (fm.config.retractableGear) fm.gearTarget = fm.gearTarget > 0.5 ? 0 : 1; break;
       case 'weaponNext': pickWeapon(1); break;
       case 'weaponPrev': pickWeapon(-1); break;
       case 'launch':
         if (fm.config.armed && selectedWeapon) {
-          ordnance.launch(loadout, selectedWeapon, fm, null, atmosphere.night);
-          rig.addShake(0.25);
+          if (ordnance.launch(loadout, selectedWeapon, fm, targeting.handoff(), atmosphere.night)) rig.addShake(0.25);
         }
         break;
+      case 'lock': if (fm.config.armed) targeting.cycle(fm, loadout, selectedWeapon); break;
     }
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
@@ -285,7 +332,7 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, STORES, get weapon() { return selectedWeapon; } };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
 
   let last = performance.now();
   let turbulence = 0;
@@ -320,6 +367,7 @@ async function boot() {
       const muzzle = aircraft.locators.Gun_Muzzle ?? _zero;
       const eject = aircraft.locators.Gun_Eject ?? _zero;
       ordnance.fireGun(dt, fm, muzzle, eject, loadout, input.controls.fire, atmosphere.night);
+      audio.setGunFiring(ordnance.gunFiredThisFrame);
       if (ordnance.gunFiredThisFrame) {
         // The recoil is real: it slows the aircraft and shakes the airframe, which is
         // most of why a burst feels like firing something rather than pressing a key.
@@ -332,8 +380,28 @@ async function boot() {
       // A fighter breaks when a missile is on its way; nothing else scares it.
       enemies.update(dt, fm.position, () => ordnance.missileInbound, atmosphere.night);
       refreshTargets();
+  const targeting = new Targeting(ordnance);
+
+  // ---- weapons audio -------------------------------------------------------
+  // Everything is heard from where the pilot is, with the travel time of sound put
+  // back in: the flash of a fuel tank two kilometres away arrives six seconds before
+  // the bang, and nothing else in the mix sells distance half as well.
+  ordnance.onImpact = (pos, power, kind) => {
+    const d = pos.distanceTo(fm.position);
+    audio.blast(d, kind === 'fuel' ? power * 1.4 : power);
+    if (d < 220) rig.addShake(Math.min(0.8, power * 0.45 * (1 - d / 220)));
+  };
+  ordnance.onFire = (what, pos) => {
+    if (what === 'missile' || what === 'rocket') {
+      const closing = fm.velocity.length();
+      audio.whoosh(pos.distanceTo(fm.position), closing, what === 'missile' ? 1 : 0.55);
+    }
+  };
       ordnance.update(dt, fm, atmosphere.night);
       targets.update(dt, atmosphere.night);
+      if (fm.config.armed) targeting.update(dt, fm, loadout, selectedWeapon);
+      else targeting.clear();
+      audio.setSeekerTone(fm.config.armed && rig.mode === 'cockpit' ? targeting.tone : targeting.tone * 0.55);
     }
 
     aircraft?.update(dt, fm, atmosphere.night);
@@ -365,6 +433,7 @@ async function boot() {
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
+    combatHud.draw(dt, camera, targeting, loadout, selectedWeapon, fm.position, fm.config.armed);
     post.render(dt, rig.mode);
   };
 
@@ -408,7 +477,30 @@ async function boot() {
       chosen = entries[0]?.config.id ?? 'cessna';
     }
   }
-  equip(byId(chosen));
+  // ---- pre-flight armament -------------------------------------------------
+  // Only the fighter gets one, and only when the player has not asked for a specific
+  // aircraft on the URL — the debug entry points should land in the air, not in a menu.
+  const cfg = byId(chosen);
+  const acObject = loaded.get(cfg.id);
+  if (cfg.armed && acObject && !params.has('aircraft') && !params.has('nolo')) {
+    const lo = new LoadoutScreen(renderer, scene.environment, acObject, acObject.locators, rack, loadout);
+    let loLast = performance.now();
+    const loLoop = () => {
+      if (lo.isDone) return;
+      requestAnimationFrame(loLoop);
+      const now = performance.now();
+      const ldt = Math.min(0.05, (now - loLast) / 1000);
+      loLast = now;
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      lo.render(ldt);
+    };
+    (window as any).__aeris.loadoutScreen = lo;
+    loLoop();
+    await lo.wait();
+    lo.dispose();
+  }
+  equip(cfg);
   applyDebugParams();
 
   // Settle the streaming systems and the camera springs before the first painted frame.
