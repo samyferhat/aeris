@@ -6,6 +6,7 @@ import { Heightfield, RUNWAY } from './world/Heightfield';
 import { Terrain } from './world/Terrain';
 import { Runway } from './world/Runway';
 import { Vegetation } from './world/Vegetation';
+import { Settlement } from './world/Settlement';
 import { Ocean } from './water/Ocean';
 import { Atmosphere } from './sky/Atmosphere';
 import { DynamicEnvironment } from './sky/Environment';
@@ -53,7 +54,14 @@ async function boot() {
   engine.setupShadows(camera);
 
   const hf = new Heightfield();
-  await hf.generate((p, label) => progress(0.05 + p * 0.18, label));
+  await hf.generate((p, label) => progress(0.05 + p * 0.16, label));
+  // The town is planned before the terrain is meshed: streets and plots are cut into
+  // the heightfield, so the terraces are in the ground rather than under the houses.
+  progress(0.22, 'Villes et villages');
+  await new Promise((r) => setTimeout(r, 20));
+  const settlement = new Settlement(hf);
+  settlement.plan();
+  hf.commit();
   progress(0.25, 'Chargement du ciel');
   const stars = await new RGBELoader().loadAsync('/hdri/kloppenheim_02.hdr');
   stars.mapping = THREE.EquirectangularReflectionMapping;
@@ -64,13 +72,19 @@ async function boot() {
   progress(0.4, 'Terrain et océan');
   const texLoader = new THREE.TextureLoader();
   const terrain = new Terrain(hf, texLoader);
+  terrain.setTownMap(settlement.townMap);
   scene.add(terrain);
+  scene.add(settlement);
   const ocean = new Ocean(hf);
   scene.add(ocean);
   const runway = new Runway(texLoader, renderer.capabilities.maxTextureSize);
   scene.add(runway);
-  progress(0.5, 'Végétation');
+  progress(0.48, 'Le bâti');
+  await Settlement.load().then((g) => settlement.build(g)).catch((e) => console.warn('town unavailable', e));
+  for (const m of settlement.materials) engine.setupShadowMaterial(m);
+  progress(0.52, 'Végétation');
   const vegetation = new Vegetation(hf);
+  vegetation.builtAt = (x, z) => settlement.builtAt(x, z);
   scene.add(vegetation);
   for (const m of vegetation.materials) engine.setupShadowMaterial(m);
   engine.setupShadowMaterial(terrain.material);
@@ -368,7 +382,7 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, settlement, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
 
   let last = performance.now();
   let turbulence = 0;
@@ -442,6 +456,7 @@ async function boot() {
     post.ambientBottom.copy(environment.skyHorizon).multiplyScalar(0.6);
     post.dofEnabled = rig.mode === 'cockpit';
     terrain.update(camera);
+    settlement.update(dt, atmosphere.night);
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
     engine.csm.update();

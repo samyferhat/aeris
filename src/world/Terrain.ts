@@ -44,6 +44,12 @@ export class Terrain extends THREE.Group {
   private cached: Node[] = [];
   private box = new THREE.Box3();
 
+  /** The built-up coverage map; the ground shows a town at any distance because of it. */
+  setTownMap(t: THREE.Texture) {
+    (this.material as any).terrainUniforms.tTown.value = t;
+    this.material.needsUpdate = true;
+  }
+
   constructor(readonly hf: Heightfield, loader: THREE.TextureLoader) {
     super();
     this.material = this.makeMaterial(loader);
@@ -289,7 +295,11 @@ export class Terrain extends THREE.Group {
       return t;
     };
     const set = (name: string) => ({ D: tex(`/textures/${name}/albedo.webp`, true), N: tex(`/textures/${name}/nrm.webp`) });
-    const grass = set('grass'), forest = set('forest'), cliff = set('rockface'), sand = set('sand'), scree = set('scree');
+    // Four sets, not five. The terrain shader is up against the sixteen-sampler limit
+    // and the scree set was the one that earned its place least: bare high ground is the
+    // same rock as the cliffs, only lying at its angle of repose, so it is drawn from
+    // the cliff set with its own tint and a flat projection.
+    const grass = set('grass'), forest = set('forest'), cliff = set('rockface'), sand = set('sand');
 
     const macro = Terrain.makeMacroNoise(256);
 
@@ -299,8 +309,9 @@ export class Terrain extends THREE.Group {
       tForestD: { value: forest.D }, tForestN: { value: forest.N },
       tCliffD: { value: cliff.D }, tCliffN: { value: cliff.N },
       tSandD: { value: sand.D }, tSandN: { value: sand.N },
-      tScreeD: { value: scree.D }, tScreeN: { value: scree.N },
-      tMacro: { value: macro }, uSeaLevel: { value: 0 }, uGroundLift: { value: 1.0 },
+      tMacro: { value: macro }, tTown: { value: null as THREE.Texture | null },
+      uWorldSize: { value: WORLD_SIZE },
+      uSeaLevel: { value: 0 }, uGroundLift: { value: 1.0 },
     };
     (mat as any)._apKey = "terrain";
     (mat as any).terrainUniforms = uniforms;

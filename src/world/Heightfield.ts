@@ -209,6 +209,68 @@ export class Heightfield {
     }
   }
 
+  // ---- carving ------------------------------------------------------------
+
+  /**
+   * Levels a rotated rectangle of ground to `target`, feathering out over `feather`
+   * metres. This is how a plot is cut into a hillside; done for every building in a hill
+   * town it produces the terraces, in the ground rather than under the geometry.
+   */
+  flattenRect(cx: number, cz: number, w: number, d: number, rot: number, target: number, feather: number) {
+    const half = WORLD_SIZE / 2;
+    const ca = Math.cos(-rot), sa = Math.sin(-rot);
+    const reach = Math.hypot(w, d) / 2 + feather;
+    const i0 = Math.max(0, Math.floor((cx - reach + half) / this.cell));
+    const i1 = Math.min(HF_RES - 1, Math.ceil((cx + reach + half) / this.cell));
+    const j0 = Math.max(0, Math.floor((cz - reach + half) / this.cell));
+    const j1 = Math.min(HF_RES - 1, Math.ceil((cz + reach + half) / this.cell));
+    for (let j = j0; j <= j1; j++) {
+      const z = -half + j * this.cell;
+      for (let i = i0; i <= i1; i++) {
+        const x = -half + i * this.cell;
+        const dx = x - cx, dz = z - cz;
+        const lx = Math.abs(dx * ca - dz * sa) - w / 2;
+        const lz = Math.abs(dx * sa + dz * ca) - d / 2;
+        const out = Math.hypot(Math.max(lx, 0), Math.max(lz, 0));
+        const k = 1 - smoothstep(0, feather, out);
+        if (k <= 0.001) continue;
+        const idx = j * HF_RES + i;
+        this.data[idx] = lerp(this.data[idx], target, k);
+      }
+    }
+  }
+
+  /** The same, along a segment: a street cut into the slope. */
+  flattenSegment(x0: number, z0: number, x1: number, z1: number, width: number, target: number, feather: number) {
+    const half = WORLD_SIZE / 2;
+    const vx = x1 - x0, vz = z1 - z0;
+    const vv = vx * vx + vz * vz;
+    const reach = width / 2 + feather;
+    const i0 = Math.max(0, Math.floor((Math.min(x0, x1) - reach + half) / this.cell));
+    const i1 = Math.min(HF_RES - 1, Math.ceil((Math.max(x0, x1) + reach + half) / this.cell));
+    const j0 = Math.max(0, Math.floor((Math.min(z0, z1) - reach + half) / this.cell));
+    const j1 = Math.min(HF_RES - 1, Math.ceil((Math.max(z0, z1) + reach + half) / this.cell));
+    for (let j = j0; j <= j1; j++) {
+      const z = -half + j * this.cell;
+      for (let i = i0; i <= i1; i++) {
+        const x = -half + i * this.cell;
+        const t = vv > 1e-6 ? clamp(((x - x0) * vx + (z - z0) * vz) / vv, 0, 1) : 0;
+        const dd = Math.hypot(x - x0 - vx * t, z - z0 - vz * t) - width / 2;
+        const k = 1 - smoothstep(0, feather, Math.max(dd, 0));
+        if (k <= 0.001) continue;
+        const idx = j * HF_RES + i;
+        this.data[idx] = lerp(this.data[idx], target, k * 0.92);
+      }
+    }
+  }
+
+  /** Pushes the carved field back to the GPU; call once when all carving is done. */
+  commit() {
+    this.maxHeight = 0;
+    for (let i = 0; i < this.data.length; i++) if (this.data[i] > this.maxHeight) this.maxHeight = this.data[i];
+    this.texture.needsUpdate = true;
+  }
+
   // ---- queries ------------------------------------------------------------
 
   /** Bilinear height at world (x, z). Outside the map: deep sea floor. */

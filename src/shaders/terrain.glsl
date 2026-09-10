@@ -15,8 +15,9 @@ uniform sampler2D tGrassD, tGrassN;
 uniform sampler2D tForestD, tForestN;
 uniform sampler2D tCliffD, tCliffN;
 uniform sampler2D tSandD, tSandN;
-uniform sampler2D tScreeD, tScreeN;
 uniform sampler2D tMacro;   // r: macro variation  g: canopy relief  b: spare field
+uniform sampler2D tTown;    // r: buildings  g: roads and hard standing  b: roof mass
+uniform float uWorldSize;
 uniform float uSeaLevel;
 uniform float uGroundLift;
 varying vec3 vTWorldPos;
@@ -127,9 +128,10 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
   float wCliff = smoothstep(0.23 + 0.09 * macro2, 0.45, slope);
   float wSand  = (1.0 - smoothstep(1.0, 3.6 + 3.4 * macro2, h)) * (1.0 - smoothstep(0.15, 0.33, slope));
   float wScree = smoothstep(540.0 + 260.0 * macro, 880.0, h);
+  float urbanMask = clamp(texture2D(tTown, P.xz / uWorldSize + 0.5).r * 2.2, 0.0, 1.0);
   float wForest = smoothstep(5.0, 26.0, h) * (1.0 - smoothstep(580.0, 840.0, h))
                 * smoothstep(0.16, 0.44, macro * 0.60 + macro2 * 0.40)
-                * (1.0 - smoothstep(0.28, 0.48, slope));
+                * (1.0 - smoothstep(0.28, 0.48, slope)) * (1.0 - urbanMask);
   // Priority: cliff over everything, then sand, then scree, then forest, then meadow.
   float rest = 1.0 - wCliff;
   wSand *= rest;    rest -= wSand;
@@ -149,8 +151,8 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
     // the first metre and a half above the water.
     vec3 c = retint(l.albedo, TINT_SAND, 0.1560, 0.70) * mix(0.48, 1.0, smoothstep(0.1, 1.8, h));
     albedo += c * wSand; rough += mix(0.35, l.rough, smoothstep(0.1, 1.8, h)) * wSand; planarN += l.normal * wSand; }
-  if (wScree > 0.02) { Layer l = samplePlanar(tScreeD, tScreeN, P.xz, 25.0, shade, mixNoise);
-    albedo += retint(l.albedo, TINT_SCREE, 0.0655, 0.85) * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
+  if (wScree > 0.02) { Layer l = samplePlanar(tCliffD, tCliffN, P.xz, 19.0, shade, mixNoise);
+    albedo += retint(l.albedo, TINT_SCREE, 0.1372, 0.85) * wScree; rough += l.rough * wScree; planarN += l.normal * wScree; }
   if (wCliff > 0.02) { Layer l = sampleTriplanar(tCliffD, tCliffN, P, N, 24.0, shade, mixNoise);
     albedo += retint(l.albedo, TINT_CLIFF, 0.1372, 0.95) * wCliff; rough += l.rough * wCliff; cliffN = l.normal; }
 
@@ -179,10 +181,28 @@ vec3 terrainSurface(out vec3 albedo, out float rough, out float ao) {
     albedo *= mix(1.0, 0.78 + 0.42 * c0, w);
   }
 
+  // ---- what has been built on it ------------------------------------------
+  //
+  // The town is in the ground as well as on it. Instanced buildings stop at three
+  // kilometres, but the streets, the yards, the roofs and the hard standing are a
+  // coverage map painted into the terrain, so a town seen from ten kilometres is still
+  // a town — grey, hard-edged and gridded — rather than a green hillside with a smudge
+  // of houses that appears when you get close.
+  vec4 town = texture2D(tTown, P.xz / uWorldSize + 0.5);
+  float built = clamp(town.r * 1.15, 0.0, 1.0);
+  float road = clamp(town.g * 1.25, 0.0, 1.0);
+  float urban = max(built, road);
+  if (urban > 0.004) {
+    vec3 yards = mix(vec3(0.085, 0.082, 0.074), vec3(0.150, 0.062, 0.038), 0.45 + 0.35 * macro2);
+    albedo = mix(albedo, yards, built * 0.80);
+    albedo = mix(albedo, vec3(0.058, 0.056, 0.056) * (0.8 + 0.5 * macro2), road * 0.86);
+    rough = mix(rough, 0.74, urban * 0.8);
+  }
+
   // Where the island is wetter it is greener, and it is wetter in the valleys and on
   // the windward flanks; a slow field stands in for both.
   float lush = 0.35 + 0.65 * macro3;
-  albedo = mix(albedo, albedo * vec3(0.82, 1.10, 0.78), (wForest + wGrass * 0.7) * lush * 0.45);
+  albedo = mix(albedo, albedo * vec3(0.82, 1.10, 0.78), (wForest + wGrass * 0.7) * lush * 0.45 * (1.0 - urban));
   albedo *= uGroundLift;
   ao = 1.0;
   rough = clamp(rough * 1.05, 0.38, 1.0);

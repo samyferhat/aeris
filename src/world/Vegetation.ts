@@ -191,6 +191,8 @@ export class Vegetation extends THREE.Group {
    * a fuel farm with a pine coming out of the roof looks like.
    */
   readonly clearings: { x: number; z: number; r: number }[] = [];
+  /** Built-up coverage, 0..1. Nothing grows through a street or a roof. */
+  builtAt: ((x: number, z: number) => number) | null = null;
 
   /** Same forest test as the terrain shader, so trees only grow where the ground is forest. */
   private forestDensity(x: number, z: number): number {
@@ -200,6 +202,7 @@ export class Vegetation extends THREE.Group {
       const dx = x - c.x, dz = z - c.z;
       if (dx * dx + dz * dz < c.r * c.r) return 0;
     }
+    if (this.builtAt && this.builtAt(x, z) > 0.12) return 0;
     const slope = this.hf.getSlope(x, z);
     if (slope > 0.48) return 0;
     // Kept in step with the forest weight in shaders/terrain.glsl: a tree that grows
