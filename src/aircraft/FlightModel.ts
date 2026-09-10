@@ -80,6 +80,15 @@ export class FlightModel {
   /** Commanded gear position: 1 down, 0 up. Moves at the configured rate. */
   gearTarget = 1;
   gear = 1;
+  /** Airbrake: commanded 0/1, and the panel's actual travel. */
+  airbrakeTarget = 0;
+  airbrake = 0;
+  /**
+   * Pitch trim, -1..1, added to the stick. What it is for is holding an attitude with
+   * the stick centred, which is also the only way the hands-off stabiliser can be
+   * persuaded to hold something other than level.
+   */
+  trim = 0;
   /** Mass of the external stores still on the pylons, kg. Owned by the loadout. */
   storeMass = 0;
   /** Parasite drag coefficient the same stores add. */
@@ -136,6 +145,8 @@ export class FlightModel {
     this.omega.set(0, 0, 0);
     this.throttle = 0; this.power = 0; this.flaps = 0; this.flapsTarget = 0; this.rpm = 0;
     this.gear = this.gearTarget = 1;
+    this.airbrake = this.airbrakeTarget = 0;
+    this.trim = 0;
     this.crashed = false;
     this.lastVel.set(0, 0, 0);
     this.syncBasis();
@@ -169,10 +180,17 @@ export class FlightModel {
     }
 
     const rate = cfg.controlRate * dt;
-    this.elevator += clamp(ctrl.pitch - this.elevator, -rate, rate);
+    // Trim shifts the stick's neutral point rather than adding to its travel, so full
+    // aft stick is still full aft stick however the aircraft is trimmed.
+    const pitchCmd = clamp(ctrl.pitch + this.trim, -1, 1);
+    this.elevator += clamp(pitchCmd - this.elevator, -rate, rate);
     this.aileron += clamp(ctrl.roll - this.aileron, -rate, rate);
     this.rudder += clamp(ctrl.yaw - this.rudder, -rate, rate);
     this.flaps += clamp(this.flapsTarget - this.flaps, -0.25 * dt, 0.25 * dt);
+    // A speed brake takes about a second and a half to run out and rather less to
+    // stow, which is why it is worth having a travel at all rather than a boolean.
+    this.airbrakeTarget = ctrl.airbrake && cfg.hasAirbrake ? 1 : 0;
+    this.airbrake += clamp(this.airbrakeTarget - this.airbrake, -1.6 * dt, 0.7 * dt);
 
     for (let i = 0; i < sub; i++) this.integrate(h, ctrl.brake);
     this.updateState(dt);
@@ -216,7 +234,10 @@ export class FlightModel {
     // rather than an accident.
     const machDrag = cfg.machDragRise * smoothstep(cfg.machDragOnset, cfg.machDragOnset + 0.14, mach);
     const gearDrag = 0.022 * this.gear * (cfg.retractableGear ? 1 : 0);
-    const CD = cfg.cd0 + this.storeDrag + cfg.cdFlaps * this.flaps + gearDrag + machDrag
+    // The board is a flat plate in the airstream: a large, honest lump of parasite drag
+    // and nothing else. On the fighter it is most of how you slow down at all.
+    const brakeDrag = 0.085 * this.airbrake;
+    const CD = cfg.cd0 + this.storeDrag + cfg.cdFlaps * this.flaps + gearDrag + machDrag + brakeDrag
       + (CL * CL) / (Math.PI * cfg.oswald * AR)
       + 0.35 * stallMix * Math.abs(alpha);
     const CY = -0.85 * beta;
@@ -257,7 +278,9 @@ export class FlightModel {
     const elevatorEff = this.elevator > 0 ? this.elevator * alphaProtection * gProtection : this.elevator;
 
     const Cm = 0.035 + cfg.cmAlpha * alpha - 0.08 * this.flaps
-      + cfg.cmElevator * elevatorEff + cfg.cmQ * qq * cfg.chord * nd;
+      + cfg.cmElevator * elevatorEff + cfg.cmQ * qq * cfg.chord * nd
+      // A dorsal board unloads the fin and pitches the nose up a little as it opens.
+      - 0.030 * this.airbrake;
     const Cl = cfg.clAileron * this.aileron + cfg.clP * p * cfg.span * nd
       + cfg.clBeta * beta + 0.015 * this.rudder;
     const Cn = cfg.cnRudder * this.rudder + cfg.cnR * r * cfg.span * nd

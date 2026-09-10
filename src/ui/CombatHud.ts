@@ -152,7 +152,8 @@ export class CombatHud {
     // ---- what is left ------------------------------------------------------
     // Bottom right, two lines, no boxes. The selected weapon and how much of it there
     // is; the gun underneath. That is the whole armament panel.
-    const x = w - 26, y = h - 72;
+    // Clear of the camera label and the time slider, which own the other corners.
+    const x = w - 26, y = h - 104;
     c.textAlign = 'right';
     if (selected) {
       const sp = STORES[selected];

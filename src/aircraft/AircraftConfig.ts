@@ -103,6 +103,8 @@ export interface AircraftConfig {
   cabinBrightness: number;
   /** Whether this aircraft carries weapons at all. The trainer never does. */
   armed: boolean;
+  /** A speed brake to deploy. A light aircraft has none, and should not pretend to. */
+  hasAirbrake: boolean;
 }
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -140,7 +142,7 @@ export const CESSNA: AircraftConfig = {
 
   refSpeed: 70, chaseDistance: 14, chaseHeight: 4.2,
   fovBase: 55, fovSpeed: 18, approachSpeed: 60, rotateSpeed: 55,
-  cabinBrightness: 1.0, armed: false,
+  cabinBrightness: 1.0, armed: false, hasAirbrake: false,
 };
 
 export const MIG29: AircraftConfig = {
@@ -185,7 +187,7 @@ export const MIG29: AircraftConfig = {
 
   refSpeed: 260, chaseDistance: 26, chaseHeight: 6.0,
   fovBase: 50, fovSpeed: 16, approachSpeed: 145, rotateSpeed: 140,
-  cabinBrightness: 0.55, armed: true,
+  cabinBrightness: 0.55, armed: true, hasAirbrake: true,
 };
 
 export const AIRCRAFT: AircraftConfig[] = [CESSNA, MIG29];

@@ -26,6 +26,7 @@ export class Audio {
   private master!: GainNode;
   private dry!: GainNode;
   private duck!: GainNode;
+  private menuGain!: GainNode;
   private gunGain!: GainNode;
   private gunLfoGain!: GainNode;
   private seekerGain!: GainNode;
@@ -99,7 +100,12 @@ export class Audio {
     // with a filter sweep. Here it is one node in the right place.
     this.duck = ctx.createGain();
     this.duck.gain.value = 1;
-    this.duck.connect(this.master);
+    // A second gain for the menus. Kept separate from the blast duck so a help panel
+    // opened during an explosion does not fight it for the same parameter.
+    this.menuGain = ctx.createGain();
+    this.menuGain.gain.value = 1;
+    this.duck.connect(this.menuGain);
+    this.menuGain.connect(this.master);
     this.cabinFilter.connect(this.duck);
 
     this.dry = ctx.createGain();
@@ -330,6 +336,15 @@ export class Audio {
     // Straight to the cabin filter: it is in the pilot's headset, not in the world.
     this.seekerGain.connect(this.dry);
     this.seekerOsc.start(); this.seekerLfo.start(); sBias.start();
+  }
+
+  /**
+   * Pull the world down behind a menu rather than cutting it. The engine going quiet
+   * but not silent is what keeps the pause feeling like the aircraft is still there.
+   */
+  setMenuDuck(on: boolean) {
+    if (!this.ctx) return;
+    this.menuGain.gain.setTargetAtTime(on ? 0.22 : 1, this.ctx.currentTime, on ? 0.10 : 0.22);
   }
 
   /** Trigger held or released. */

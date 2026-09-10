@@ -43,7 +43,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 .warn { position: absolute; left: 50%; top: calc(50% + 150px); transform: translateX(-50%); font-size: 12px; letter-spacing: 4px; color: var(--accent); opacity: 0; transition: opacity .15s; }
 .warn.on { opacity: 1; animation: blink 0.6s steps(2) infinite; }
 @keyframes blink { 50% { opacity: .2; } }
-.cammode { position: absolute; right: max(28px, 6vw); bottom: 28px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); text-align: right; }
+/* Top right, clear of the status block on the left and the weapons panel below. */
+.cammode { position: absolute; right: max(28px, 6vw); top: 78px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--hud-dim); text-align: right; }
 .hint { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); font-size: 11px; letter-spacing: 1px; color: var(--hud-dim); opacity: .8; transition: opacity 1s; }
 .hint.gone { opacity: 0; }
 
@@ -196,3 +197,122 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
   font-size: 12px; font-weight: 600; letter-spacing: 4px; }
 .lo-go:hover { filter: brightness(1.08); }
 @media (max-width: 980px) { .lo-main { flex-direction: column; } .lo-side { width: auto; } }
+
+/* ---- help panel ------------------------------------------------------------
+   Frosted glass over the live scene, not a black modal: the world stays visible
+   and the panel sits on it. Same ink, same accent and same restraint as the HUD. */
+.help {
+  position: fixed; inset: 0; z-index: 30; display: flex;
+  align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none;
+  backdrop-filter: blur(0px) brightness(1);
+  -webkit-backdrop-filter: blur(0px) brightness(1);
+  transition: opacity .2s ease-out, backdrop-filter .22s ease-out, -webkit-backdrop-filter .22s ease-out;
+}
+.help.on {
+  opacity: 1; pointer-events: auto;
+  backdrop-filter: blur(13px) brightness(.42) saturate(.85);
+  -webkit-backdrop-filter: blur(13px) brightness(.42) saturate(.85);
+}
+.help-panel {
+  width: min(1500px, 94vw); max-height: 92vh; padding: 22px 30px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.13);
+  background: linear-gradient(180deg, rgba(16,21,28,.72), rgba(9,12,17,.80));
+  box-shadow: 0 40px 120px -40px rgba(0,0,0,.95),
+              inset 0 1px 0 rgba(255,255,255,.10),
+              0 0 0 1px rgba(255,210,122,.06);
+  /* Opens by resolving: a shade too big, a shade blurred, both settling in 200 ms. */
+  transform: scale(1.028); filter: blur(6px); opacity: 0;
+  transition: transform .2s cubic-bezier(.16,.9,.3,1), filter .2s ease-out, opacity .2s ease-out;
+}
+.help.on .help-panel { transform: scale(1); filter: blur(0); opacity: 1; }
+
+.help-head { display: flex; align-items: baseline; gap: 16px; padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,.08); }
+.help-title { font-size: 15px; letter-spacing: 8px; color: var(--hud); }
+.help-sub { font-family: 'Barlow Condensed', 'Inter', sans-serif; font-size: 13px;
+  letter-spacing: 3px; text-transform: uppercase; color: var(--hud-dim); }
+.help-tabs { margin-left: auto; display: flex; gap: 4px; }
+.help-tab { font-family: 'Barlow Condensed', sans-serif; font-size: 13px; letter-spacing: 2px;
+  text-transform: uppercase; padding: 5px 14px; border-radius: 3px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(255,255,255,.10); color: var(--hud-dim);
+  transition: color .16s, border-color .16s, background .16s; }
+.help-tab:hover { color: var(--hud); border-color: rgba(255,255,255,.22); }
+.help-tab.on { color: #14100a; background: var(--accent); border-color: var(--accent); }
+
+.help-cols { display: grid; grid-template-columns: 1.15fr .85fr 1.1fr .95fr; gap: 8px 28px; padding: 16px 0 12px; }
+.help-col { min-width: 0; }
+.help-col h2 { margin: 0 0 8px; font-family: 'Barlow Condensed', sans-serif; font-weight: 600;
+  font-size: 12px; letter-spacing: 3.5px; text-transform: uppercase; color: var(--accent);
+  display: flex; align-items: center; gap: 8px; }
+
+/* Rows cascade in, a few milliseconds apart. */
+.help-row, .help-col h2 { opacity: 0; transform: translateY(6px); }
+.help.on .help-row, .help.on .help-col h2 {
+  animation: help-in .26s cubic-bezier(.16,.9,.3,1) forwards;
+  animation-delay: calc(60ms + var(--i) * 9ms);
+}
+@keyframes help-in { to { opacity: 1; transform: translateY(0); } }
+
+.help-row { display: grid; grid-template-columns: 108px 1fr; gap: 10px; align-items: start;
+  padding: 5px 0; }
+.help-keys { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; padding-top: 1px; }
+.help-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.help-label { font-family: 'Barlow Condensed', 'Inter', sans-serif; font-size: 15px;
+  font-weight: 500; letter-spacing: .3px; color: rgba(235,242,248,.94); line-height: 1.15;
+  display: flex; align-items: center; gap: 6px; }
+.help-desc { font-size: 10.5px; line-height: 1.3; color: rgba(235,242,248,.40); }
+.help-badge { font-style: normal; font-family: 'JetBrains Mono', monospace; font-size: 8px;
+  letter-spacing: 1px; padding: 1.5px 5px; border-radius: 2px; color: var(--accent);
+  border: 1px solid rgba(255,210,122,.35); background: rgba(255,210,122,.08); }
+
+/* Keycaps: a real cap has a raised face, a lip and a shadow under it. */
+.help-cap { display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 24px; padding: 0 6px; border-radius: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1;
+  color: rgba(235,242,248,.88);
+  background: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.045));
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 1.5px 0 rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.22);
+  transition: background .09s, color .09s, transform .09s, box-shadow .09s; }
+.help-cap.wide { min-width: 40px; font-size: 10px; }
+/* Pressed for real, right now. */
+.help-cap.down { color: #14100a; transform: translateY(1.5px);
+  background: linear-gradient(180deg, #ffe0a0, var(--accent));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 rgba(0,0,0,0), 0 0 14px rgba(255,210,122,.55), inset 0 1px 0 rgba(255,255,255,.4); }
+
+.help-cap.pad.round { border-radius: 50%; min-width: 24px; padding: 0; }
+.help-cap.pad.pill { border-radius: 12px; min-width: 34px; font-size: 10px; }
+.help-cap.pad.stick { border-radius: 12px; min-width: 52px; font-size: 9.5px; letter-spacing: .5px; }
+.help-cap.face-a { color: #9fe8a6; } .help-cap.face-b { color: #ff9f96; }
+.help-cap.face-x { color: #9ec8ff; } .help-cap.face-y { color: #ffdf95; }
+.help-cap.down.face-a, .help-cap.down.face-b, .help-cap.down.face-x, .help-cap.down.face-y { color: #14100a; }
+.help-nopad { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: rgba(235,242,248,.22); }
+
+.help-foot { display: flex; justify-content: space-between; align-items: baseline;
+  padding-top: 11px; border-top: 1px solid rgba(255,255,255,.08); }
+.help-tip { font-family: 'Barlow Condensed', sans-serif; font-size: 13px; letter-spacing: .6px;
+  color: rgba(255,210,122,.78); }
+.help-close { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 1px;
+  color: var(--hud-dim); }
+
+/* The discreet reminder, for the first fifteen seconds of the first flight. */
+.help-hint { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%);
+  z-index: 12; pointer-events: none;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 13px; letter-spacing: 2.4px;
+  text-transform: uppercase; color: rgba(235,242,248,.40);
+  text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  opacity: 0; transition: opacity .8s ease; }
+.help-hint:not(.gone) { opacity: 1; }
+
+@media (max-height: 820px) {
+  .help-panel { padding: 16px 24px 12px; }
+  .help-cols { gap: 4px 22px; padding: 12px 0 8px; }
+  .help-row { padding: 3px 0; }
+  .help-desc { font-size: 10px; }
+}
+@media (max-width: 1180px) {
+  .help-cols { grid-template-columns: 1fr 1fr; }
+}

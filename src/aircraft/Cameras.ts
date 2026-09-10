@@ -19,6 +19,15 @@ export class CameraRig {
   private chasePos = new THREE.Vector3();
   private chaseUp = new THREE.Vector3(0, 1, 0);
   orbit = { theta: 0.6, phi: 1.2, dist: 16 };
+  /**
+   * Free look, radians off the boresight, and the zoom. Set by the input each frame.
+   * Looking around is the one thing a cockpit view needs that a fixed camera cannot
+   * give: the canopy exists to be looked out of sideways.
+   */
+  lookYaw = 0;
+  lookPitch = 0;
+  zoom = 0;
+  private zoomK = 0;
   private shake = 0;
   private shakeVec = new THREE.Vector3();
   private headLag = new THREE.Vector3();
@@ -46,6 +55,20 @@ export class CameraRig {
   }
 
   addShake(amount: number) { this.shake = Math.min(1.5, this.shake + amount); }
+
+  /** Turn the pilot's head without turning the aircraft. */
+  private applyLook(cam: THREE.PerspectiveCamera) {
+    if (Math.abs(this.lookYaw) < 1e-4 && Math.abs(this.lookPitch) < 1e-4) return;
+    this.tmpQ.setFromEuler(new THREE.Euler(this.lookPitch, this.lookYaw, 0, 'YXZ'));
+    cam.quaternion.multiply(this.tmpQ);
+    cam.up.set(0, 1, 0).applyQuaternion(cam.quaternion);
+  }
+
+  /** Narrow the field of view smoothly rather than snapping to a magnified view. */
+  private zoomed(fov: number) {
+    this.zoomK += (this.zoom - this.zoomK) * 0.14;
+    return fov * (1 - 0.55 * this.zoomK);
+  }
 
   update(dt: number, fm: FlightModel, orbitDelta: { x: number; y: number; zoom: number }, turbulence: number) {
     this.t += dt;
@@ -78,7 +101,8 @@ export class CameraRig {
       // slight view shake rotation
       this.tmpQ.setFromEuler(new THREE.Euler(this.shakeVec.x * 0.012, this.shakeVec.y * 0.012, this.shakeVec.z * 0.008));
       cam.quaternion.multiply(this.tmpQ);
-      cam.fov = lerp(cam.fov, 68 + 6 * s.afterburner, 0.1);
+      this.applyLook(cam);
+      cam.fov = lerp(cam.fov, this.zoomed(68 + 6 * s.afterburner), 0.1);
     } else if (this.mode === 'chase') {
       const dist = cfg.chaseDistance * (1 + 0.28 * speedN);
       const height = cfg.chaseHeight * (1 + 0.28 * speedN);
@@ -117,7 +141,15 @@ export class CameraRig {
       // cue, not a zoom out: cap it at the reference speed and keep the reheat kick small.
       const fovN = Math.min(1, speedN);
       const fov = cfg.fovBase + cfg.fovSpeed * fovN * fovN + 5 * s.afterburner;
-      cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-dt * 2));
+      cam.fov = lerp(cam.fov, this.zoomed(fov), 1 - Math.exp(-dt * 2));
+      // The chase view swings round the aircraft rather than turning the head.
+      if (Math.abs(this.lookYaw) > 1e-3 || Math.abs(this.lookPitch) > 1e-3) {
+        this.tmpQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.lookYaw);
+        const off = cam.position.clone().sub(pos).applyQuaternion(this.tmpQ);
+        this.tmpQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0).cross(off).normalize(), this.lookPitch);
+        cam.position.copy(pos).add(off.applyQuaternion(this.tmpQ));
+        cam.lookAt(this.lookTarget);
+      }
     } else {
       this.orbit.theta -= orbitDelta.x * 0.005;
       this.orbit.phi = clamp(this.orbit.phi - orbitDelta.y * 0.005, 0.15, Math.PI - 0.2);
@@ -127,7 +159,7 @@ export class CameraRig {
       cam.position.copy(pos).add(off).add(this.shakeVec.clone().multiplyScalar(0.3));
       cam.up.set(0, 1, 0);
       cam.lookAt(pos);
-      cam.fov = lerp(cam.fov, 50, 0.1);
+      cam.fov = lerp(cam.fov, this.zoomed(50), 0.1);
     }
     // never go underground
     cam.updateProjectionMatrix();

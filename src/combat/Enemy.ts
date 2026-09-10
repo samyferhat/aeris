@@ -25,7 +25,7 @@ const FWD = new THREE.Vector3(0, 0, 1);
 const UP = new THREE.Vector3(0, 1, 0);
 
 /** A burning flare: the thing an infrared seeker prefers to the aircraft. */
-class Decoy implements DamageTarget {
+export class Decoy implements DamageTarget {
   readonly position = new THREE.Vector3();
   readonly velocity = new THREE.Vector3();
   readonly radius = 26;
@@ -337,4 +337,49 @@ export class EnemyFleet extends THREE.Group {
       f.stepDecoys(dt, night);
     }
   }
+}
+
+
+/**
+ * The player's BVP-30-26 dispensers. Thirty cartridges, and a seeker that has just
+ * been offered one will take it: this is the only answer to the launch warning, which
+ * is what makes the warning worth having.
+ */
+export class FlareDispenser {
+  readonly decoys: Decoy[] = [];
+  left = 30;
+  private cool = 0;
+  private side = 1;
+
+  fire(pos: THREE.Vector3, vel: THREE.Vector3, fx: CombatFx, night: number) {
+    if (this.left <= 0 || this.cool > 0) return false;
+    this.left--;
+    this.cool = 0.28;
+    this.side = -this.side;
+    const d = new Decoy();
+    d.position.copy(pos);
+    d.velocity.copy(vel).multiplyScalar(0.45);
+    d.velocity.y -= 7;
+    d.velocity.x += this.side * (6 + Math.random() * 10);
+    d.velocity.z += (Math.random() - 0.5) * 12;
+    this.decoys.push(d);
+    fx.flare(pos, d.velocity, night);
+    return true;
+  }
+
+  update(dt: number, fx: CombatFx, night: number) {
+    if (this.cool > 0) this.cool -= dt;
+    for (let i = this.decoys.length - 1; i >= 0; i--) {
+      const d = this.decoys[i];
+      d.life -= dt;
+      if (d.life <= 0) { d.alive = false; this.decoys.splice(i, 1); continue; }
+      d.velocity.y -= 6.5 * dt;
+      d.velocity.multiplyScalar(Math.exp(-0.9 * dt));
+      d.position.addScaledVector(d.velocity, dt);
+      fx.flare(d.position, d.velocity, night);
+    }
+  }
+
+  collect(out: DamageTarget[]) { for (const d of this.decoys) if (d.alive) out.push(d); }
+  reset() { this.left = 30; for (const d of this.decoys) d.alive = false; this.decoys.length = 0; }
 }

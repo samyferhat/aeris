@@ -29,26 +29,37 @@ Un écran de choix s'affiche avant le vol. `?aircraft=mig29` le contourne.
 |---|---|---|
 | Tangage (cabrer / piquer) | ↓ / ↑, ou souris après un clic droit | Stick gauche |
 | Roulis | ← / → | Stick gauche |
-| Lacet (palonnier) | Q / E | Gâchettes LT / RT |
-| Gaz | Maj (plus) / Ctrl (moins), molette | Stick droit haut / bas, ou A / B |
+| Lacet (palonnier) | Q / E | LB / RB |
+| Gaz | Maj (plus) / Ctrl (moins) | RT / LT |
+| Aérofreins · freins de roue | B | X |
 | Volets | V (sortir) / F (rentrer) | Croix haut / bas |
-| Freins | B | X |
+| Train d'atterrissage | G | L3 |
+| Trim | Pg↑ / Pg↓, Retour arrière pour remettre à zéro | — |
 | Changer de caméra | C | Y |
-| Caméra libre : orbite et zoom | Clic gauche glissé, molette | Stick droit |
+| Regard libre | Clic droit maintenu + souris | Stick droit |
+| Zoom | Z | — |
+| **Canon** | Espace, ou clic gauche souris capturée | A |
+| **Tirer l'arme sélectionnée** | Entrée | B |
+| **Changer d'arme** | Tab | Croix gauche / droite |
+| **Verrouiller une cible** | T, ou clic molette | R3 |
+| **Leurres** | X | — |
+| Aide | H ou Échap | Back |
+| Pause | P | — |
 | Heure du jour | Curseur en bas, ou [ et ] | — |
 | Remettre sur la piste | R | Start |
-| Pause | P ou Échap | Select |
-| Train d'atterrissage (MiG) | G | Stick droit enfoncé |
-| **Canon** | Espace, ou clic gauche souris capturée | RB |
-| **Tirer l'arme sélectionnée** | Entrée | LB |
-| **Changer d'arme** | Tab | Croix gauche / droite |
-| **Verrouiller une cible** | T, ou clic molette | Stick droit enfoncé |
-| Masquer l'ATH | H | — |
+| Capture d'écran | F2 | — |
+| Plein écran | F11 | — |
+| Masquer l'interface | I | — |
 | Couper le son | M | — |
+
+Le panneau d'aide (**H**) liste tout cela, s'adapte à la manette si elle est branchée,
+et allume les touches réellement pressées : on peut essayer une commande sans le
+fermer. Il s'ouvre tout seul au premier lancement, puis plus jamais.
 
 Le son démarre au premier clic ou à la première touche, comme l'exige le navigateur.
 Le freinage est passé sur **B** : sur un avion de combat, la barre d'espace est la
-détente.
+détente. Sur le MiG, le même levier sort l'aérofrein en vol et freine les roues au sol,
+comme sur l'appareil réel.
 
 ## Les deux appareils
 
@@ -96,8 +107,8 @@ src/
               Effects (fumée, étincelles, traçantes, explosions, débris) · Targets · Enemy
   fx/         Pipeline (post-traitement complet) · Particles · Afterburner · JetEffects
   audio/      Audio (piston ou turbine, vent, Doppler, réverbération, bang supersonique)
-  ui/         HUD · CombatHud (réticule, verrouillage, alerte) · TimeSlider
-              Selection (choix de l'appareil) · LoadoutScreen (emport)
+  ui/         HUD · CombatHud (réticule, verrouillage, alerte) · HelpPanel (commandes)
+              TimeSlider · Selection (choix de l'appareil) · LoadoutScreen (emport)
   shaders/    atmosphere · sky · terrain · ocean · clouds · post
 tools/        fetch-assets.py (télécharge et empaquette) · shrink-glb.py · blender_rpc.py
               vite-screenshot-plugin.ts (capture de référence, serveur de dev uniquement)

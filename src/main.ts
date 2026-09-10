@@ -15,6 +15,7 @@ import { Aircraft } from './aircraft/Aircraft';
 import { CameraRig } from './aircraft/Cameras';
 import { HUD } from './ui/HUD';
 import { CombatHud } from './ui/CombatHud';
+import { HelpPanel } from './ui/HelpPanel';
 import { TimeSlider } from './ui/TimeSlider';
 import { Pipeline } from './fx/Pipeline';
 import { Particles } from './fx/Particles';
@@ -29,7 +30,7 @@ import { CombatFx } from './combat/Effects';
 import { Ordnance } from './combat/Ordnance';
 import { STORES } from './combat/Armament';
 import { TargetWorld } from './combat/Targets';
-import { EnemyFleet } from './combat/Enemy';
+import { EnemyFleet, FlareDispenser } from './combat/Enemy';
 import { Targeting } from './combat/Targeting';
 
 const _size = new THREE.Vector2();
@@ -216,9 +217,11 @@ async function boot() {
     const list = targets.all.slice();
     enemies.collectTargets(list as never[]);
     if (fm.config.armed) list.push(player as never);
+    flares.collect(list as never[]);
     ordnance.targets = list;
     ordnance.playerTarget = fm.config.armed ? (player as never) : null;
   };
+  const flares = new FlareDispenser();
   refreshTargets();
   const targeting = new Targeting(ordnance);
 
@@ -259,6 +262,10 @@ async function boot() {
   const post = new Pipeline(renderer, scene, camera);
   const hud = new HUD();
   const combatHud = new CombatHud(document.getElementById('hud')!);
+  const help = new HelpPanel();
+  // Opening the panel stops the world and pulls the engine down behind it.
+  help.onToggle = (open) => { helpPaused = open; audio.setMenuDuck(open); };
+  let helpPaused = false;
   const timeSlider = new TimeSlider(atmosphere.hour);
   const applyTime = (h: number) => {
     atmosphere.setHour(h);
@@ -293,9 +300,37 @@ async function boot() {
         }
         break;
       case 'lock': if (fm.config.armed) targeting.cycle(fm, loadout, selectedWeapon); break;
+      case 'flare':
+        if (fm.config.armed) {
+          const loc = aircraft?.locators['Flare_' + (flares.left % 2 ? 'L' : 'R')];
+          _zero.copy(loc ?? new THREE.Vector3()).applyQuaternion(fm.quaternion).add(fm.position);
+          flares.fire(_zero, fm.velocity, combatFx, atmosphere.night);
+        }
+        break;
+      case 'trimReset': fm.trim = 0; break;
+      case 'shot': wantShot = true; break;
+      case 'fullscreen':
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen().catch(() => { /* denied */ });
+        break;
+      case 'help': help.toggle(); break;
     }
   };
   window.addEventListener('resize', () => { engine.resize(camera); post.setSize(window.innerWidth, window.innerHeight); });
+
+  /**
+   * A still, straight off the canvas. It has to be taken in the same turn as the draw:
+   * without preserveDrawingBuffer the back buffer is gone by the next event loop.
+   */
+  const saveScreenshot = (r: THREE.WebGLRenderer) => {
+    try {
+      const url = r.domElement.toDataURL('image/png');
+      const a = document.createElement('a');
+      const t = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url; a.download = `aeris-${t}.png`;
+      a.click();
+    } catch (e) { console.warn('screenshot failed', e); }
+  };
 
   /**
    * Reproducible views for development and for grabbing reference stills:
@@ -340,9 +375,19 @@ async function boot() {
   let tunnel = 0;
 
   /** One simulation + render step. Split out of the rAF loop so tools can drive it. */
+  /** Set by the screenshot key; served after the frame is on the canvas. */
+  let wantShot = false;
+
   const tick = (dt: number) => {
     input.update(dt);
-    if (!paused) {
+    // Trim, free look and zoom are read straight off the input rather than routed
+    // through the flight model, because none of them are aerodynamic.
+    fm.trim = THREE.MathUtils.clamp(fm.trim + input.consumeTrim(), -0.6, 0.6);
+    rig.lookYaw = input.controls.lookYaw;
+    rig.lookPitch = input.controls.lookPitch;
+    rig.zoom = input.controls.zoom ? 1 : 0;
+    const frozen = paused || helpPaused;
+    if (!frozen) {
       fm.step(dt, input.controls);
       // Gentle turbulence: stronger in the afternoon thermals and close to the ground.
       const thermals = 0.5 + 0.5 * Math.sin((atmosphere.hour - 14) / 24 * Math.PI * 2);
@@ -364,7 +409,7 @@ async function boot() {
       fm.touchdownEvent = 0;
     }
     // --- weapons -----------------------------------------------------------
-    if (aircraft && fm.config.armed && !paused) {
+    if (aircraft && fm.config.armed && !frozen) {
       const muzzle = aircraft.locators.Gun_Muzzle ?? _zero;
       const eject = aircraft.locators.Gun_Eject ?? _zero;
       ordnance.fireGun(dt, fm, muzzle, eject, loadout, input.controls.fire, atmosphere.night);
@@ -377,29 +422,13 @@ async function boot() {
         rig.addShake(0.09);
       }
     }
-    if (!paused) {
+    if (!frozen) {
       // A fighter breaks when a missile is on its way; nothing else scares it.
       enemies.update(dt, fm.position, (e) => ordnance.chasedBy(e), atmosphere.night);
       refreshTargets();
-  const targeting = new Targeting(ordnance);
-
-  // ---- weapons audio -------------------------------------------------------
-  // Everything is heard from where the pilot is, with the travel time of sound put
-  // back in: the flash of a fuel tank two kilometres away arrives six seconds before
-  // the bang, and nothing else in the mix sells distance half as well.
-  ordnance.onImpact = (pos, power, kind) => {
-    const d = pos.distanceTo(fm.position);
-    audio.blast(d, kind === 'fuel' ? power * 1.4 : power);
-    if (d < 220) rig.addShake(Math.min(0.8, power * 0.45 * (1 - d / 220)));
-  };
-  ordnance.onFire = (what, pos) => {
-    if (what === 'missile' || what === 'rocket') {
-      const closing = fm.velocity.length();
-      audio.whoosh(pos.distanceTo(fm.position), closing, what === 'missile' ? 1 : 0.55);
-    }
-  };
       ordnance.update(dt, fm, atmosphere.night);
       targets.update(dt, atmosphere.night);
+      flares.update(dt, combatFx, atmosphere.night);
       if (fm.config.armed) targeting.update(dt, fm, loadout, selectedWeapon);
       else targeting.clear();
       audio.setSeekerTone(fm.config.armed && rig.mode === 'cockpit' ? targeting.tone : targeting.tone * 0.55);
@@ -433,9 +462,11 @@ async function boot() {
         (x, z) => Math.max(0, hf.getHeight(x, z)));
     }
     audio.update(dt, fm.state, rig.mode, camera.position, fm.position, fm.velocity, turbulence);
+    help.update(dt, input);
     hud.update(fm.state, rig.mode, dt, fm.isCrashed);
     combatHud.draw(dt, camera, targeting, loadout, selectedWeapon, fm.position, fm.config.armed);
     post.render(dt, rig.mode);
+    if (wantShot) { wantShot = false; saveScreenshot(renderer); }
   };
 
   const loop = () => {
@@ -506,6 +537,9 @@ async function boot() {
 
   // Settle the streaming systems and the camera springs before the first painted frame.
   for (let i = 0; i < 8; i++) tick(1 / 60);
+
+  // First run gets the panel; every run after gets the reminder for fifteen seconds.
+  if (!help.maybeShowFirstRun()) help.startHint();
 
   loop();
 }

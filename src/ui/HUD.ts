@@ -36,7 +36,7 @@ export class HUD {
         <span>G</span><span class="val mono g"></span>
       </div>
       <div class="cammode"></div>
-      <div class="hint">Shift pour les gaz · flèches pour piloter · clic droit pour la souris · C caméra</div>
+      <div class="hint"></div>
       <div class="crash"><div>IMPACT</div><small>R pour revenir sur la piste</small></div>`;
     const q = (s: string) => this.root.querySelector(s) as HTMLElement;
     this.speedStrip = q('.tape.speed .strip'); this.speedBox = q('.tape.speed .box');

@@ -316,7 +316,10 @@ export class Aircraft extends THREE.Group {
     set('Slat_R', X, -deg(18) * slat);
     // Airbrake: out whenever the throttle is closed and there is speed to kill.
     const brakeOut = clamp((0.22 - fm.state.throttle) * 5, 0, 1) * clamp((fm.state.airspeed - 60) / 60, 0, 1);
-    this.airbrake = lerp(this.airbrake, fm.state.onGround && fm.state.groundSpeed > 20 ? 1 : brakeOut, 1 - Math.exp(-dt * 2.5));
+    // The pilot's board, or the automatic deployment during the landing roll — the
+    // panel is one piece of geometry either way.
+    const brakeCmd = Math.max(fm.airbrake, fm.state.onGround && fm.state.groundSpeed > 20 ? 1 : brakeOut);
+    this.airbrake = lerp(this.airbrake, brakeCmd, 1 - Math.exp(-dt * 2.5));
     set('Airbrake', X, deg(45) * this.airbrake);
     // Nozzles: the petals close to a convergent throat at idle and swing wide open in
     // reheat. Only the radius moves — scaling the length as well would slide the whole
