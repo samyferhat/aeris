@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { Engine } from './core/Engine';
 import { Input } from './core/Input';
-import { Heightfield, RUNWAY } from './world/Heightfield';
+import { Heightfield, RUNWAY, WORLD_SIZE } from './world/Heightfield';
 import { Terrain } from './world/Terrain';
 import { Runway } from './world/Runway';
 import { Vegetation } from './world/Vegetation';
 import { Settlement } from './world/Settlement';
+import { Life } from './world/Life';
 import { Ocean } from './water/Ocean';
 import { Atmosphere } from './sky/Atmosphere';
 import { DynamicEnvironment } from './sky/Environment';
@@ -80,8 +81,10 @@ async function boot() {
   const runway = new Runway(texLoader, renderer.capabilities.maxTextureSize);
   scene.add(runway);
   progress(0.48, 'Le bâti');
-  await Settlement.load().then((g) => settlement.build(g)).catch((e) => console.warn('town unavailable', e));
+  const life = new Life(hf, settlement);
+  await Settlement.load().then((g) => { settlement.build(g); life.build(g); }).catch((e) => console.warn('town unavailable', e));
   for (const m of settlement.materials) engine.setupShadowMaterial(m);
+  scene.add(life);
   progress(0.52, 'Végétation');
   const vegetation = new Vegetation(hf);
   vegetation.builtAt = (x, z) => settlement.builtAt(x, z);
@@ -94,6 +97,8 @@ async function boot() {
   // ---- aircraft ----------------------------------------------------------
   progress(0.55, 'Appareils');
   const fm = new FlightModel(hf, CESSNA);
+  // Buildings, cranes and the bridge deck are as solid as the hillside.
+  fm.solidAt = (x, y, z) => settlement.solidAt(x, y, z);
   const loaded = new Map<string, Aircraft>();
   for (let i = 0; i < AIRCRAFT.length; i++) {
     const cfg = AIRCRAFT[i];
@@ -274,6 +279,7 @@ async function boot() {
 
   progress(0.92, 'Post-traitement');
   const post = new Pipeline(renderer, scene, camera);
+  post.setTerrain(hf.texture, WORLD_SIZE);
   const hud = new HUD();
   const combatHud = new CombatHud(document.getElementById('hud')!);
   const help = new HelpPanel();
@@ -382,7 +388,7 @@ async function boot() {
 
 
 
-  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, settlement, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
+  (window as any).__aeris = { fm, rig, atmosphere, applyTime, renderer, scene, THREE, camera, post, terrain, ocean, vegetation, settlement, life, particles, audio, equip, loaded, byId, engine, input, loadout, rack, ordnance, combatFx, targets, enemies, targeting, combatHud, STORES, get weapon() { return selectedWeapon; } };
 
   let last = performance.now();
   let turbulence = 0;
@@ -457,6 +463,8 @@ async function boot() {
     post.dofEnabled = rig.mode === 'cockpit';
     terrain.update(camera);
     settlement.update(dt, atmosphere.night);
+    if (!frozen) life.update(dt, atmosphere.night, fm.position, fm.velocity);
+    ocean.setWakes(life.wakes);
     vegetation.update(camera, dt, 0.6 + 0.5 * turbulence);
     ocean.update(dt, camera);
     engine.csm.update();

@@ -28,6 +28,12 @@ uniform vec2 uWind;               // unit vector the swell runs towards
 uniform vec3 uWaterTint;          // scattering colour of the water body
 uniform float uGlitter;           // strength of the sun's path on the water
 
+// Wakes. Everything that moves on or just over the water writes one of these.
+#define MAX_WAKES 14
+uniform int uWakeCount;
+uniform vec4 uWakeA[MAX_WAKES];   // xy: position   zw: heading, unit
+uniform vec4 uWakeB[MAX_WAKES];   // x: beam  y: length  z: strength
+
 /**
  * Extinction of clear tropical water, per metre, for R, G and B. Red goes twenty times
  * faster than blue, and that single fact is the whole colour of a lagoon.
@@ -192,4 +198,31 @@ float caustics(vec2 xz, float depth) {
   // They defocus with depth, and they need some water to form in at all: a caustic net
   // in twenty centimetres of water is a bright patch where there should be a beach.
   return 1.0 + net * 1.35 * smoothstep(0.3, 1.6, depth) * (1.0 - smoothstep(1.0, 20.0, depth));
+}
+
+
+/**
+ * Foam left behind by a hull.
+ *
+ * Two things make a wake read: the churned water directly astern, which spreads slowly
+ * and dies out, and the two feathered arms standing at nineteen and a half degrees from
+ * the track — the Kelvin angle, which is the same for a rowing boat and a supertanker
+ * and is what the eye recognises from the air.
+ */
+float wakeFoam(vec2 P) {
+  float f = 0.0;
+  for (int i = 0; i < MAX_WAKES; i++) {
+    if (i >= uWakeCount) break;
+    vec4 A = uWakeA[i], B = uWakeB[i];
+    vec2 d = P - A.xy;
+    float t = -dot(d, A.zw);                       // metres astern
+    if (t < -B.x * 1.5 || t > B.y) continue;
+    float w = abs(dot(d, vec2(-A.w, A.z)));        // metres off the track
+    float ct = max(t, 0.0);
+    float fade = pow(1.0 - smoothstep(0.0, B.y, ct), 1.6) * B.z;
+    float trail = exp(-pow(w / (B.x * 0.55 + ct * 0.035), 2.0));
+    float arm = exp(-pow((w - 0.354 * ct) / (1.3 + ct * 0.028), 2.0));
+    f += (trail * 0.75 + arm * 0.62) * fade;
+  }
+  return clamp(f, 0.0, 1.0);
 }

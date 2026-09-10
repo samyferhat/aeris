@@ -81,6 +81,14 @@ export class Pipeline {
   /** Live-tunable cloud density shaping (see clouds.frag.glsl). */
   cloudDensity = { bias: 0.82, slope: 0.75, scale: 1.0 };
   cloudBase = 950; cloudTop = 1750;
+
+  /** The heightfield, so cloud can form on the summits rather than only drift over them. */
+  setTerrain(tex: THREE.Texture, worldSize: number) {
+    const cu = (this.cloudMat as THREE.ShaderMaterial).uniforms;
+    cu.tTerrain.value = tex;
+    cu.uWorldSize.value = worldSize;
+  }
+
   dofEnabled = false;
   // A still taken at random has to pass for a photograph, and a photograph of an island
   // from an aeroplane is not smeared. Enough to carry speed, not enough to see in a frame.
@@ -128,6 +136,7 @@ export class Pipeline {
       uInvProjection: { value: new THREE.Matrix4() }, uInvView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
       uNear: { value: camera.near }, uFar: { value: camera.far }, uTime: { value: 0 }, uCoverage: { value: this.cloudCoverage },
       uCloudBase: { value: this.cloudBase }, uCloudTop: { value: this.cloudTop },
+      tTerrain: { value: null as THREE.Texture | null }, uWorldSize: { value: 26000 },
       uDensityBias: { value: 0.82 }, uDensitySlope: { value: 0.75 }, uDensityScale: { value: 1.0 }, uAmbientTop: { value: this.ambientTop }, uAmbientBottom: { value: this.ambientBottom },
       uSunColor: { value: this.sunColor }, uWind: { value: new THREE.Vector2(1, 0.3) }, uResolution: { value: new THREE.Vector2(size.x >> 1, size.y >> 1) }, uFrame: { value: 0 },
     });

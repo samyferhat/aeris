@@ -38,6 +38,9 @@ export class Ocean extends THREE.Group {
       // by thirty metres the extinction has removed everything the bottom sent back.
       uWaterTint: { value: new THREE.Color(0x0d4a60).convertSRGBToLinear() },
       uGlitter: { value: 0.42 },
+      uWakeCount: { value: 0 },
+      uWakeA: { value: Array.from({ length: 14 }, () => new THREE.Vector4()) },
+      uWakeB: { value: Array.from({ length: 14 }, () => new THREE.Vector4()) },
     };
     this.material = this.makeMaterial();
     const nearGeo = new THREE.PlaneGeometry(NEAR_SIZE, NEAR_SIZE, NEAR_SEGS, NEAR_SEGS);
@@ -50,6 +53,23 @@ export class Ocean extends THREE.Group {
     this.far = new THREE.Mesh(farGeo, this.material);
     this.far.frustumCulled = false;
     this.add(this.near, this.far);
+  }
+
+  /**
+   * Hands the shader the list of things currently disturbing the surface. Kept as a
+   * uniform array rather than a texture: there are never more than a dozen and the
+   * fragment loop breaks out of it on the first empty slot.
+   */
+  setWakes(list: { x: number; z: number; dx: number; dz: number; beam: number; len: number; strength: number }[]) {
+    const A = this.uniforms.uWakeA.value as THREE.Vector4[];
+    const B = this.uniforms.uWakeB.value as THREE.Vector4[];
+    const n = Math.min(list.length, A.length);
+    for (let i = 0; i < n; i++) {
+      const w = list[i];
+      A[i].set(w.x, w.z, w.dx, w.dz);
+      B[i].set(w.beam, w.len, w.strength, 0);
+    }
+    this.uniforms.uWakeCount.value = n;
   }
 
   update(dt: number, camera: THREE.Camera) {
@@ -171,6 +191,10 @@ export class Ocean extends THREE.Group {
                    + texture2D(tBed, P.xz * 0.155 + drift * 0.021).a * 0.24;
           float foam = smoothstep(0.34, 0.86, (surf * 1.2 + wash * 0.95 + caps * 0.9) * (0.20 + 1.50 * fn));
           foam *= mix(0.55, 1.0, detailFade);
+          // Wakes on top: they are not surf and must not be thresholded with it, or a
+          // boat in a calm bay leaves nothing at all.
+          float wake = wakeFoam(P.xz) * (0.45 + 0.75 * fn) * detailFade;
+          foam = clamp(foam + wake, 0.0, 1.0);
 
           // Fresnel takes the body colour away as the view goes grazing, which is when
           // the sky reflection is all there is left of the sea.

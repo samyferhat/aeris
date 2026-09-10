@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Heightfield } from './Heightfield';
-import { WORLD_SIZE, PORT, VILLAGES, AIRFIELDS, STRAIT, LIGHTHOUSE } from './Archipelago';
+import { WORLD_SIZE, PORT, VILLAGES, AIRFIELDS, STRAIT, LIGHTHOUSE, WRECK } from './Archipelago';
 import { applyAerialPerspective } from '../sky/AerialPerspective';
 import { mulberry32, SimplexNoise, smoothstep, clamp, lerp } from '../core/Noise';
 
@@ -20,35 +20,43 @@ import { mulberry32, SimplexNoise, smoothstep, clamp, lerp } from '../core/Noise
  */
 
 /** Footprint and role of each archetype exported from blender/town/build.py. */
-interface Arch { w: number; d: number; cat: 'old' | 'house' | 'block' | 'civic' | 'works' | 'boat' | 'special' }
+interface Arch { w: number; d: number; cat: 'old' | 'house' | 'block' | 'civic' | 'works' | 'boat' | 'special'; h?: number }
 const ARCH: Record<string, Arch> = {
-  Town_A: { w: 6.2, d: 9.0, cat: 'old' },
-  Town_B: { w: 7.4, d: 10.5, cat: 'old' },
-  Town_C: { w: 8.6, d: 7.4, cat: 'old' },
-  Town_D: { w: 12.0, d: 11.5, cat: 'old' },
-  House_A: { w: 9.0, d: 7.2, cat: 'house' },
-  House_B: { w: 11.0, d: 8.0, cat: 'house' },
-  Villa: { w: 14.0, d: 13.5, cat: 'house' },
-  Farm: { w: 22.0, d: 16.0, cat: 'house' },
-  Block_A: { w: 22.0, d: 12.0, cat: 'block' },
-  Block_B: { w: 30.0, d: 14.0, cat: 'block' },
-  Block_C: { w: 16.0, d: 11.0, cat: 'block' },
-  Terrace: { w: 32.0, d: 8.4, cat: 'block' },
-  Church: { w: 11.0, d: 40.0, cat: 'civic' },
-  School: { w: 34.0, d: 14.0, cat: 'civic' },
-  Shop: { w: 10.0, d: 8.0, cat: 'old' },
-  Warehouse: { w: 40.0, d: 20.0, cat: 'works' },
-  Shed: { w: 18.0, d: 10.0, cat: 'works' },
-  Silo: { w: 13.0, d: 6.0, cat: 'works' },
-  WaterTower: { w: 7.5, d: 7.5, cat: 'works' },
-  Crane: { w: 11.0, d: 40.0, cat: 'works' },
-  QuayShed: { w: 26.0, d: 13.0, cat: 'works' },
+  Town_A: { w: 6.2, d: 9.0, cat: 'old', h: 11.4 },
+  Town_B: { w: 7.4, d: 10.5, cat: 'old', h: 15.1 },
+  Town_C: { w: 8.6, d: 7.4, cat: 'old', h: 9.1 },
+  Town_D: { w: 12.0, d: 11.5, cat: 'old', h: 11.8 },
+  House_A: { w: 9.0, d: 7.2, cat: 'house', h: 5.5 },
+  House_B: { w: 11.0, d: 8.0, cat: 'house', h: 8.9 },
+  Villa: { w: 14.0, d: 13.5, cat: 'house', h: 9.0 },
+  Farm: { w: 22.0, d: 16.0, cat: 'house', h: 8.4 },
+  Block_A: { w: 22.0, d: 12.0, cat: 'block', h: 16.1 },
+  Block_B: { w: 30.0, d: 14.0, cat: 'block', h: 24.4 },
+  Block_C: { w: 16.0, d: 11.0, cat: 'block', h: 9.2 },
+  Terrace: { w: 32.0, d: 8.4, cat: 'block', h: 11.0 },
+  Church: { w: 11.0, d: 40.0, cat: 'civic', h: 35.2 },
+  School: { w: 34.0, d: 14.0, cat: 'civic', h: 7.9 },
+  Shop: { w: 10.0, d: 8.0, cat: 'old', h: 8.8 },
+  Warehouse: { w: 40.0, d: 20.0, cat: 'works', h: 11.1 },
+  Shed: { w: 18.0, d: 10.0, cat: 'works', h: 6.7 },
+  Silo: { w: 13.0, d: 6.0, cat: 'works', h: 15.2 },
+  WaterTower: { w: 7.5, d: 7.5, cat: 'works', h: 21.0 },
+  Crane: { w: 11.0, d: 40.0, cat: 'works', h: 25.2 },
+  QuayShed: { w: 26.0, d: 13.0, cat: 'works', h: 8.8 },
   BoatFishing: { w: 3.8, d: 12.0, cat: 'boat' },
   CargoShip: { w: 13.0, d: 78.0, cat: 'boat' },
   Skiff: { w: 2.1, d: 6.4, cat: 'boat' },
-  Lighthouse: { w: 10.4, d: 14.0, cat: 'special' },
-  BridgeTower: { w: 28.0, d: 6.0, cat: 'special' },
-  BridgeDeck: { w: 18.4, d: 20.0, cat: 'special' },
+  Lighthouse: { w: 10.4, d: 14.0, cat: 'special', h: 26.6 },
+  BridgeTower: { w: 28.0, d: 6.0, cat: 'special', h: 100.2 },
+  BridgeDeck: { w: 18.4, d: 20.0, cat: 'special', h: 1.4 },
+  Car: { w: 1.8, d: 4.3, cat: 'boat' },
+  Van: { w: 2.1, d: 5.7, cat: 'boat' },
+  Lamp: { w: 1.0, d: 2.6, cat: 'special' },
+  Pier: { w: 4.6, d: 20.0, cat: 'special', h: 2.6 },
+  Breakwater: { w: 11.0, d: 12.0, cat: 'special', h: 2.6 },
+  Buoy: { w: 1.3, d: 1.3, cat: 'boat' },
+  Wreck: { w: 11.0, d: 54.0, cat: 'boat' },
+  TunnelPortal: { w: 15.0, d: 2.2, cat: 'special', h: 9.1 },
 };
 
 export interface Placement {
@@ -61,8 +69,6 @@ export interface Placement {
   tint: THREE.Color;
   seed: number;
 }
-
-const p_startsWithBridge = (t: string) => t.startsWith('Bridge');
 
 /** A street: a polyline on the ground, with a width. */
 export interface Street { pts: THREE.Vector2[]; width: number; kind: 'main' | 'lane' | 'coast' }
@@ -123,9 +129,70 @@ export class Settlement extends THREE.Group {
     this.planScattered();
     this.planSpecials();
     this.planRoads();
+    this.planHarbour();
+    this.planStreetLights();
     this.carve();
     this.buildRoads();
     this.rasterise();
+  }
+
+  /**
+   * The harbour: a breakwater across the mouth, piers off the quay, buoys marking the
+   * fairway, and the freighter that never made it.
+   */
+  private planHarbour() {
+    const P = this.portSite;
+    if (this.moorings.length > 2) {
+      // Piers, off the quay and out into the water.
+      for (let i = 1; i < this.moorings.length; i += 3) {
+        const m = this.moorings[i];
+        this.place('Pier', m.x, m.z, m.rot + Math.PI / 2, 1, 0);
+      }
+      // Breakwater: a mole running on from the last mooring, out across the swell,
+      // stopping where the water gets too deep to build in.
+      const a = this.moorings[Math.max(0, this.moorings.length - 3)];
+      const b = this.moorings[this.moorings.length - 1];
+      const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz) || 1;
+      const ux2 = dx / L, uz2 = dz / L;
+      for (let i = 0; i < 22; i++) {
+        const t = 30 + i * 11.5;
+        const x = b.x + ux2 * t, z = b.z + uz2 * t;
+        const h = this.hf.getHeight(x, z);
+        if (h > 0.5 || h < -17) break;
+        this.place('Breakwater', x, z, Math.atan2(uz2, ux2) + Math.PI / 2, 1, 0);
+      }
+    }
+    for (let i = 0; i < 9; i++) {
+      const a = this.rnd() * Math.PI * 2, r = 260 + this.rnd() * 1500;
+      const x = P.x + Math.cos(a) * r, z = P.z + Math.sin(a) * r;
+      const d = this.hf.getHeight(x, z);
+      if (d > -4 || d < -40) continue;
+      this.place('Buoy', x, z, 0, 1, 0);
+    }
+    this.place('Wreck', WRECK.x, WRECK.z, WRECK.heading, 1, Math.max(-2.4, this.hf.getHeight(WRECK.x, WRECK.z) + 2.2));
+  }
+
+  /** Lamp posts down the streets of anywhere that has streets. */
+  private planStreetLights() {
+    const towns = [this.portSite, ...this.villageSites];
+    for (const st of this.streets) {
+      if (st.kind === 'lane') continue;
+      let acc = 0;
+      for (let i = 1; i < st.pts.length; i++) {
+        const a = st.pts[i - 1], b = st.pts[i];
+        const seg = a.distanceTo(b);
+        acc += seg;
+        if (acc < 38) continue;
+        acc = 0;
+        const near = towns.some((t) => Math.hypot(a.x - t.x, a.y - t.z) < (t === this.portSite ? 2200 : 700));
+        if (!near) continue;
+        const dx = (b.x - a.x) / seg, dz = (b.y - a.y) / seg;
+        const side = (i >> 1) % 2 ? 1 : -1;
+        const off = st.width / 2 + 0.9;
+        const x = a.x - dz * side * off, z = a.y + dx * side * off;
+        this.place('Lamp', x, z, Math.atan2(dz * side, -dx * side), 1, this.hf.getHeight(x, z));
+      }
+    }
   }
 
   // ---- roads ---------------------------------------------------------------
@@ -470,14 +537,21 @@ export class Settlement extends THREE.Group {
       const dx = b.x - a.x, dz = b.y - a.y, L = Math.hypot(dx, dz) || 1;
       const ux = dx / L, uz = dz / L;
       const rot = Math.atan2(-uz, ux);
-      const land = this.hf.getHeight(pts[i].x - uz * 30, pts[i].y + ux * 30) >
-                   this.hf.getHeight(pts[i].x + uz * 30, pts[i].y - ux * 30) ? 1 : -1;
+      const land = this.hf.getHeight(pts[i].x - uz * 60, pts[i].y + ux * 60) >
+                   this.hf.getHeight(pts[i].x + uz * 60, pts[i].y - ux * 60) ? 1 : -1;
       const r = this.rnd();
       const type = r < 0.34 ? 'QuayShed' : r < 0.55 ? 'Warehouse' : r < 0.72 ? 'Shed' : r < 0.85 ? 'Crane' : 'Silo';
-      const off = type === 'Crane' ? 14 : 30;
-      const sgn = type === 'Crane' ? -land : land;
-      this.place(type, pts[i].x - uz * sgn * off, pts[i].y + ux * sgn * off, rot, 1);
-      this.moorings.push({ x: pts[i].x + uz * land * 22, z: pts[i].y - ux * land * 22, rot });
+      // Sheds set back from the edge, the crane right on it.
+      const off = type === 'Crane' ? 13 : 32;
+      this.place(type, pts[i].x - uz * land * off, pts[i].y + ux * land * off, rot, 1);
+      // The mooring is where the water actually is, found by walking out from the quay.
+      // Guessed at a fixed offset, it put every boat in the town's back garden.
+      let mx = pts[i].x, mz = pts[i].y;
+      for (let t = 8; t <= 140; t += 6) {
+        const px = pts[i].x + uz * land * t, pz = pts[i].y - ux * land * t;
+        if (this.hf.getHeight(px, pz) < -2.0) { mx = px; mz = pz; break; }
+      }
+      if (mx !== pts[i].x || mz !== pts[i].y) this.moorings.push({ x: mx, z: mz, rot });
     }
   }
 
@@ -609,11 +683,15 @@ export class Settlement extends THREE.Group {
     if (!A) return;
     const gy = y ?? this.hf.getHeight(x, z);
     if (y === undefined && gy < 1.0 && A.cat !== 'boat') return;
-    if (A.cat !== 'boat' && !p_startsWithBridge(type) && !this.claim(x, z, Math.hypot(A.w, A.d) * 0.42)) return;
+    // Only buildings compete for ground. A lamp post, a pier or a buoy is street
+    // furniture and is allowed to stand next to whatever it is furnishing.
+    if ((A.cat === 'old' || A.cat === 'house' || A.cat === 'block' || A.cat === 'civic' || A.cat === 'works')
+        && !this.claim(x, z, Math.hypot(A.w, A.d) * 0.42)) return;
     const tint = new THREE.Color(WALL_PALETTE[Math.floor(this.rnd() * WALL_PALETTE.length)]);
     // Weathering: a slow drift towards grey, different for every building.
     tint.lerp(new THREE.Color(0x8f8a80), this.rnd() * 0.45);
-    this.placements.push({ type, x, z, y: gy, rot, scale, tint, seed: this.rnd() });
+    const pl: Placement = { type, x, z, y: gy, rot, scale, tint, seed: this.rnd() };
+    this.placements.push(pl);
     if (A.cat !== 'boat') this.clearings.push({ x, z, r: Math.max(A.w, A.d) * 0.75 + 6 });
   }
 
@@ -635,10 +713,11 @@ export class Settlement extends THREE.Group {
     }
     for (const p of this.placements) {
       const A = ARCH[p.type];
-      if (A.cat === 'boat' || p.type.startsWith('Bridge')) continue;
+      if (A.cat === 'boat' || p.type.startsWith('Bridge')) { this.addSolid(p); continue; }
       p.y = this.hf.getHeight(p.x, p.z);
       this.hf.flattenRect(p.x, p.z, A.w + 3.5, A.d + 3.5, p.rot, p.y, 7);
       p.y = this.hf.getHeight(p.x, p.z);
+      this.addSolid(p);
     }
   }
 
@@ -681,6 +760,48 @@ export class Settlement extends THREE.Group {
    * walking a list of two thousand clearings, which is what the vegetation would
    * otherwise have to do for every candidate tree.
    */
+  /**
+   * Is this point inside something solid? Buildings, the cranes, the bridge deck.
+   *
+   * The bridge is the reason this takes a height and not just a footprint: its deck is
+   * a slab a hundred and sixty metres up, and the whole point of the strait is to go
+   * under it.
+   */
+  solidAt(x: number, y: number, z: number): boolean {
+    const C = 60;
+    const gi = Math.floor(x / C), gj = Math.floor(z / C);
+    for (let j = gj - 1; j <= gj + 1; j++) for (let i = gi - 1; i <= gi + 1; i++) {
+      const cell = this.solids.get(i * 65536 + j);
+      if (!cell) continue;
+      for (const o of cell) {
+        if (y < o.y0 || y > o.y1) continue;
+        const dx = x - o.x, dz = z - o.z;
+        const ca = Math.cos(-o.rot), sa = Math.sin(-o.rot);
+        if (Math.abs(dx * ca - dz * sa) > o.hw) continue;
+        if (Math.abs(dx * sa + dz * ca) > o.hd) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private solids = new Map<number, { x: number; z: number; rot: number; hw: number; hd: number; y0: number; y1: number }[]>();
+
+  private addSolid(p: Placement) {
+    const A = ARCH[p.type];
+    if (!A.h) return;
+    const C = 60;
+    const gi = Math.floor(p.x / C), gj = Math.floor(p.z / C);
+    const k = gi * 65536 + gj;
+    let cell = this.solids.get(k);
+    if (!cell) this.solids.set(k, cell = []);
+    const isDeck = p.type === 'BridgeDeck';
+    cell.push({
+      x: p.x, z: p.z, rot: p.rot, hw: A.w / 2, hd: A.d / 2,
+      y0: isDeck ? p.y - 3.0 : p.y - 2, y1: p.y + A.h,
+    });
+  }
+
   builtAt(x: number, z: number): number {
     const M = Settlement.MAP, half = WORLD_SIZE / 2;
     const i = Math.round((x + half) / WORLD_SIZE * (M - 1));
@@ -693,6 +814,9 @@ export class Settlement extends THREE.Group {
   // ==========================================================================
   // Geometry
   // ==========================================================================
+
+  /** The shared material, so anything that moves can be drawn with the same one. */
+  get buildingMaterial() { return this.material(); }
 
   static async load(): Promise<Map<string, THREE.BufferGeometry>> {
     const gltf = await new GLTFLoader().loadAsync('/models/town.glb');
@@ -799,8 +923,10 @@ export class Settlement extends THREE.Group {
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
           // Windows at dusk. Not all at once and not all the same: a street lights up
           // building by building over the half hour the sun takes to go.
-          float win = 1.0 - abs(vPart - 2.0);
-          totalEmissiveRadiance += vec3(1.0, 0.72, 0.42) * (win * vLit * uNight * 2.6);`);
+          // Clamped: without the max, every wall carries a negative emissive and the
+          // whole town glows in the wrong direction after dark.
+          float win = max(0.0, 1.0 - abs(vPart - 2.0));
+          totalEmissiveRadiance += vec3(1.0, 0.74, 0.46) * (win * vLit * uNight * 1.45);`);
     });
     this.sharedMaterial = mat;
     return mat;

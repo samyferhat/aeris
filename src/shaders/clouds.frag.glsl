@@ -7,6 +7,8 @@ uniform sampler2D tDepth;
 uniform sampler3D tShape;
 uniform sampler3D tDetail;
 uniform sampler2D tWeather;
+uniform sampler2D tTerrain;   // the heightfield, for the clouds that form on the peaks
+uniform float uWorldSize;
 uniform mat4 uInvProjection;
 uniform mat4 uInvView;
 uniform vec3 uCamPos;
@@ -27,6 +29,7 @@ uniform float uFrame;
 varying vec2 vUv;
 
 #define STEPS 48
+#define ORO_DROP 620.0
 #define LIGHT_STEPS 4
 
 float linearDepth(float z) {
@@ -44,15 +47,31 @@ float interleavedGradient(vec2 p) {
   return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
-// Height fraction inside the layer 0..1
-float heightFrac(vec3 p) { return clamp((p.y - uCloudBase) / (uCloudTop - uCloudBase), 0.0, 1.0); }
+/**
+ * Orographic lift, 0..1.
+ *
+ * Air pushed up a mountainside cools and condenses, which is why an island with a peak
+ * on it wears a cap of cloud on a day when the sea around it is clear. Modelling that is
+ * two lines: over high ground the cloud base comes down to meet the summit and the local
+ * coverage goes up. Everything else — the shape, the erosion, the lighting — is the same
+ * volume as the rest of the deck, so the cap belongs to the sky it sits in.
+ */
+float oroAt(vec2 xz) {
+  return smoothstep(230.0, 720.0, texture2D(tTerrain, xz / uWorldSize + 0.5).r);
+}
 
-float densityAt(vec3 p, float hf, bool detail) {
+// Height fraction inside the layer 0..1, with the base pulled down over high ground.
+float heightFrac(vec3 p, float oro) {
+  float b = uCloudBase - oro * ORO_DROP;
+  return clamp((p.y - b) / (uCloudTop - b), 0.0, 1.0);
+}
+
+float densityAt(vec3 p, float hf, float oro, bool detail) {
   vec2 wuv = (p.xz + uWind * uTime * 4.0) * 0.00006;
   vec3 weather = texture2D(tWeather, wuv).rgb;
   // The generated weather map spans roughly [0.27, 0.71]; normalise it, then bias
   // by the global coverage slider so 0 = clear sky and 1 = overcast.
-  float covLocal = clamp((weather.r - 0.27) / 0.44 + (uCoverage - 0.5) * 1.7, 0.0, 1.0);
+  float covLocal = clamp((weather.r - 0.27) / 0.44 + (uCoverage - 0.5) * 1.7 + oro * 0.60, 0.0, 1.0);
   if (covLocal <= 0.02) return 0.0;
   // Vertical profile: flat base, cauliflower top. `type` fattens the cloud.
   float type = weather.g;
@@ -85,9 +104,10 @@ float lightMarch(vec3 p, float sigma) {
   float od = 0.0;
   for (int i = 0; i < LIGHT_STEPS; i++) {
     p += uSunDir * step * (1.0 + float(i) * 0.6);
-    float hf = heightFrac(p);
+    float oro = oroAt(p.xz);
+    float hf = heightFrac(p, oro);
     if (hf <= 0.0 || hf >= 1.0) break;
-    od += densityAt(p, hf, i < 2) * step * (1.0 + float(i) * 0.6);
+    od += densityAt(p, hf, oro, i < 2) * step * (1.0 + float(i) * 0.6);
   }
   float beer = exp(-od * sigma);
   float beerPowder = beer * (1.0 - exp(-od * sigma * 2.0)) * 2.0;
@@ -104,10 +124,13 @@ void main() {
   float sceneDist = depthRaw >= 0.9999 ? 1e9 : linearDepth(depthRaw) / max(0.001, dot(rd, normalize((uInvView * vec4(0.0, 0.0, -1.0, 0.0)).xyz)));
 
   // Slab intersection (flat layer; the curvature of the earth is ignored at these ranges)
-  float tBase = (uCloudBase - ro.y) / rd.y;
+  // The slab has to start at the lowest the base can ever be pulled to, or the march
+  // never enters the cap sitting on the summit.
+  float slabBase = uCloudBase - ORO_DROP;
+  float tBase = (slabBase - ro.y) / rd.y;
   float tTop = (uCloudTop - ro.y) / rd.y;
   float t0, t1;
-  if (ro.y < uCloudBase) { if (rd.y <= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } t0 = tBase; t1 = tTop; }
+  if (ro.y < slabBase) { if (rd.y <= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } t0 = tBase; t1 = tTop; }
   else if (ro.y > uCloudTop) { if (rd.y >= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } t0 = tTop; t1 = tBase; }
   else { t0 = 0.0; t1 = rd.y > 0.0 ? tTop : (rd.y < 0.0 ? tBase : 1e5); }
   t1 = min(t1, sceneDist);
@@ -138,8 +161,9 @@ void main() {
   for (int i = 0; i < STEPS; i++) {
     if (T < 0.03 || t > t1) break;
     vec3 p = ro + rd * t;
-    float hf = heightFrac(p);
-    float d = densityAt(p, hf, true);
+    float oro = oroAt(p.xz);
+    float hf = heightFrac(p, oro);
+    float d = densityAt(p, hf, oro, true);
     if (d > 0.001) {
       float ext = d * sigma * stepLen;
       float lt = lightMarch(p, sigma);

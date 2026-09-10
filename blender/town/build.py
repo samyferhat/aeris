@@ -491,6 +491,109 @@ def build_bridge_deck():
     return obj('BridgeDeck', mb, bevel=0.02)
 
 
+
+# ================================================================ life =====
+def build_car():
+    """A small saloon. Seen from two hundred metres it is a coloured dash on a road;
+    what has to be right is the length, the roof line and the glazing band."""
+    mb = MB()
+    bx(mb, 0, 0, 1.72, 4.20, 0.28, 0.98, WH)
+    bx(mb, 0, -0.15, 1.60, 2.30, 0.98, 1.46, WH)
+    bx(mb, 0, -0.15, 1.62, 2.10, 1.02, 1.40, GL)
+    for (sx, sy) in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        mb.cyl((sx * 0.80, sy * 1.35, 0.31), (sx * 0.70, sy * 1.35, 0.31), 0.31, 0.31, 8, True, DK, up=(0, 1, 0))
+    bx(mb, 0, 2.12, 1.40, 0.08, 0.55, 0.80, GL)
+    return obj('Car', mb, bevel=0.03)
+
+
+def build_van():
+    mb = MB()
+    bx(mb, 0, 0, 2.00, 5.60, 0.34, 2.55, WH)
+    bx(mb, 0, -2.30, 1.90, 0.10, 1.45, 2.30, GL)
+    for (sx, sy) in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        mb.cyl((sx * 0.94, sy * 1.85, 0.37), (sx * 0.82, sy * 1.85, 0.37), 0.37, 0.37, 8, True, DK, up=(0, 1, 0))
+    return obj('Van', mb, bevel=0.03)
+
+
+def build_lamp():
+    """Street lamp: a column, a curved arm, a lantern. The lantern is glass so it
+    lights up with everything else at dusk."""
+    mb = MB()
+    mb.cyl((0, 0, 0), (0, 0, 7.2), 0.13, 0.09, 6, True, DK)
+    mb.cyl((0, 0, 7.2), (0, 1.05, 7.55), 0.08, 0.07, 5, True, DK)
+    bx(mb, 0, 1.30, 0.34, 0.62, 7.30, 7.55, GL)
+    bx(mb, 0, 1.30, 0.40, 0.68, 7.55, 7.66, DK)
+    return obj('Lamp', mb, bevel=0.015)
+
+
+def build_pier():
+    """A timber jetty on piles: twenty metres of deck and the piles under it."""
+    mb = MB()
+    bx(mb, 0, 0, 4.2, 20.0, 1.35, 1.65, WD)
+    for i in range(5):
+        for sx in (-1, 1):
+            mb.cyl((sx * 1.7, -8.0 + i * 4.0, -2.5), (sx * 1.7, -8.0 + i * 4.0, 1.4), 0.20, 0.18, 6, True, WD)
+    for i in range(6):
+        for sx in (-1, 1):
+            mb.cyl((sx * 2.05, -8.5 + i * 3.4, 1.65), (sx * 2.05, -8.5 + i * 3.4, 2.55), 0.07, 0.07, 5, True, WD)
+    return obj('Pier', mb, bevel=0.02)
+
+
+def build_breakwater():
+    """A section of rubble mound: two rows of armour blocks on a berm."""
+    mb = MB()
+    bx(mb, 0, 0, 11.0, 12.0, -3.0, 1.1, ST)
+    bx(mb, 0, 0, 6.0, 12.0, 1.1, 2.6, CO)
+    for i in range(5):
+        for sx in (-1, 1):
+            mb.cyl((sx * (3.6 + (i % 2) * 0.7), -5.0 + i * 2.5, 0.4), (sx * (3.6 + (i % 2) * 0.7), -5.0 + i * 2.5, 2.3),
+                   1.35, 1.15, 5, True, ST)
+    return obj('Breakwater', mb, bevel=0.05)
+
+
+def build_buoy():
+    mb = MB()
+    mb.cyl((0, 0, -0.9), (0, 0, 1.15), 0.62, 0.52, 8, True, RU)
+    mb.cyl((0, 0, 1.15), (0, 0, 2.35), 0.10, 0.08, 5, True, STL)
+    bx(mb, 0, 0, 0.34, 0.34, 2.35, 2.65, RU)
+    return obj('Buoy', mb, bevel=0.02)
+
+
+def build_wreck():
+    """A coaster aground and broken in two, rusted through and leaning."""
+    mb = MB()
+    hull(mb, 54.0, 11.0, 4.4, 2.6, RU, deck_mat=RU)
+    # The break: the after part sits lower and canted, so the two halves do not line up.
+    bx(mb, 0, -14.0, 10.4, 3.0, 0.6, 3.0, RU)
+    bx(mb, 0, -22.0, 9.6, 8.0, 1.6, 8.6, RU)
+    for sgn in (-1, 1):
+        bx(mb, sgn * 4.9, -22.0, 0.1, 6.0, 4.4, 6.4, DK)
+    mb.cyl((0, -24.0, 8.6), (0, -24.0, 12.6), 1.5, 1.35, 10, True, DK)
+    # Ribs showing where the plating has gone.
+    for i in range(6):
+        bx(mb, 0, 4.0 + i * 4.0, 11.2, 0.35, 0.4, 2.8, DK)
+    return obj('Wreck', mb, bevel=0.04)
+
+
+def build_tunnel_portal():
+    """A portal cut into a hillside: a concrete headwall with an arched mouth."""
+    mb = MB()
+    bx(mb, 0, 0, 13.0, 1.6, 0.0, 8.4, CO)
+    rings = []
+    for ss in (-0.9, 0.9):
+        pts = []
+        n = 13
+        for i in range(n):
+            t = i / (n - 1)
+            ang = math.pi * t
+            pts.append((-math.cos(ang) * 4.3, 1.2 + math.sin(ang) * 4.3))
+        pts = [(4.3, 0.0)] + pts + [(-4.3, 0.0)]
+        rings.append([(dx, ss, dz) for (dx, dz) in pts])
+    mb._loft_world(rings, True, False, False, DK)
+    bx(mb, 0, 0, 15.0, 2.2, 8.4, 9.1, CO)
+    return obj('TunnelPortal', mb, bevel=0.03)
+
+
 BUILT = [
     build_town_a(), build_town_b(), build_town_c(), build_town_d(),
     build_house_a(), build_house_b(), build_villa(), build_farm(),
@@ -500,6 +603,8 @@ BUILT = [
     build_crane(), build_quay_shed(),
     build_fishing_boat(), build_cargo_ship(), build_skiff(),
     build_lighthouse(), build_bridge_tower(), build_bridge_deck(),
+    build_car(), build_van(), build_lamp(), build_pier(), build_breakwater(),
+    build_buoy(), build_wreck(), build_tunnel_portal(),
 ]
 x = 0.0
 for ob in BUILT:

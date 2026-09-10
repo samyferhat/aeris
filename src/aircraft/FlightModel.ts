@@ -104,6 +104,11 @@ export class FlightModel {
 
   /** Vertical speed at the moment of touchdown, m/s. Consumed by the game-feel layer. */
   touchdownEvent = 0;
+  /**
+   * Anything solid that is not the ground: a building, a crane, the bridge deck.
+   * Takes a height as well as a footprint, because going under the bridge has to work.
+   */
+  solidAt: ((x: number, y: number, z: number) => boolean) | null = null;
   private wasOnGround = true;
   private accel = new THREE.Vector3();
   get bodyAccel() { return this.accel; }
@@ -358,6 +363,11 @@ export class FlightModel {
     // Anything but the wheels touching is a crash. Park it and bleed the energy away
     // rather than bouncing it back out.
     const clearance = -this.wheels.reduce((m, wl) => Math.min(m, wl.local.y), 0);
+    if (this.solidAt && this.solidAt(this.position.x, this.position.y, this.position.z)) {
+      this.crashed = true;
+      this.velocity.multiplyScalar(Math.max(0, 1 - 7 * dt));
+      this.omega.multiplyScalar(Math.max(0, 1 - 9 * dt));
+    }
     const cgGround = this.hf.getGround(this.position.x, this.position.z);
     if (this.position.y < cgGround + clearance * 0.6) {
       this.crashed = true;
