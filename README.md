@@ -4,7 +4,9 @@ Mini simulateur de vol photoréaliste dans le navigateur. Deux appareils — un 
 et un MiG-29 — un archipel de vingt-cinq kilomètres avec une ville portuaire, trois
 aérodromes et un détroit à passer sous un pont : décoller, voler, se poser.
 
-![AERIS](docs/31-port.jpg)
+![Passage du détroit en MiG-29](docs/gameplay.gif)
+*MiG-29 dans le détroit : passage sous le pont, postcombustion, ressource au-dessus de
+la baie du port. Capturé dans le jeu, image par image.*
 
 ## Lancer
 
